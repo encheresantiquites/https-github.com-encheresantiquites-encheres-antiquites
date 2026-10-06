@@ -28,7 +28,13 @@ export const LoginModal: React.FC<LoginModalProps> = ({
       await loginWithCredentials(email, password);
       onLoginSuccess();
     } catch (err: any) {
-      setError(err.message || 'Identifiants incorrects.');
+      console.error('Erreur login credentials:', err);
+      const msg = err.message || '';
+      if (msg.includes('Failed query') || msg.includes('syntax') || msg.includes('select') || msg.includes('terminating connection')) {
+        setError('Connexion temporairement indisponible, veuillez réessayer dans quelques instants.');
+      } else {
+        setError(msg || 'Identifiants incorrects.');
+      }
     } finally {
       setLoading(false);
     }
@@ -128,6 +134,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <input
                 type="email"
                 required
+                autoComplete="username"
                 placeholder="votre-email@exemple.com"
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
@@ -145,6 +152,7 @@ export const LoginModal: React.FC<LoginModalProps> = ({
               <input
                 type="password"
                 required
+                autoComplete="current-password"
                 placeholder="••••••••"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}

@@ -350,12 +350,19 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               {lot.reference}
             </span>
             {/* Live presence indicator */}
-            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 shadow-sm">
+            <span
+              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 shadow-sm"
+              title={
+                viewersCount <= 1
+                  ? 'Vous êtes actuellement la seule personne à consulter cette pièce'
+                  : `${viewersCount} personnes consultent simultanément cette fiche en direct`
+              }
+            >
               <span className="relative flex h-2 w-2">
                 <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
                 <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
               </span>
-              <span>{viewersCount} en direct</span>
+              <span>{viewersCount <= 1 ? '1 en direct' : `${viewersCount} en direct`}</span>
             </span>
           </div>
 

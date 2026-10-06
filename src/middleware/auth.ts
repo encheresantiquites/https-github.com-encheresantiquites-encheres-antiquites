@@ -1,7 +1,7 @@
 import { Request, Response, NextFunction } from 'express';
 import { adminAuth } from '../lib/firebase-admin.ts';
 import { DecodedIdToken } from 'firebase-admin/auth';
-import { db } from '../db/index.ts';
+import { db, withDbRetry } from '../db/index.ts';
 import { users } from '../db/schema.ts';
 import { eq } from 'drizzle-orm';
 
@@ -25,7 +25,7 @@ export const requireAuth = async (
     // Mode email / mot de passe ou simulation
     if (token.startsWith('TOKEN_') || token.startsWith('SIMULATED_')) {
       const email = Buffer.from(token.replace(/^(TOKEN_|SIMULATED_)/, ''), 'base64').toString('utf-8');
-      const matchingUsers = await db.select().from(users).where(eq(users.email, email));
+      const matchingUsers = await withDbRetry(() => db.select().from(users).where(eq(users.email, email)));
       if (matchingUsers.length > 0) {
         req.dbUser = matchingUsers[0];
         req.user = { uid: matchingUsers[0].uid, email: matchingUsers[0].email } as any;
@@ -37,20 +37,19 @@ export const requireAuth = async (
     req.user = decodedToken;
 
     // Retrieve or match user in DB
-    const matchingUsers = await db
-      .select()
-      .from(users)
-      .where(eq(users.uid, decodedToken.uid));
+    const matchingUsers = await withDbRetry(() =>
+      db.select().from(users).where(eq(users.uid, decodedToken.uid))
+    );
 
     if (matchingUsers.length > 0) {
       req.dbUser = matchingUsers[0];
     } else {
       // Check if user already seeded by email (e.g. jmmichiels1981@gmail.com)
       if (decodedToken.email) {
-        const emailUsers = await db
-          .select()
-          .from(users)
-          .where(eq(users.email, decodedToken.email));
+        const userEmail = decodedToken.email;
+        const emailUsers = await withDbRetry(() =>
+          db.select().from(users).where(eq(users.email, userEmail))
+        );
 
         if (emailUsers.length > 0) {
           // Link UID

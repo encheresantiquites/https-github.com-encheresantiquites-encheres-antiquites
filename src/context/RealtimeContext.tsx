@@ -79,6 +79,20 @@ function playTone(type: 'outbid' | 'winning') {
   }
 }
 
+// Identifiant de session navigateur stable (évite de compter plusieurs fois le même utilisateur)
+function getBrowserSessionId(): string {
+  try {
+    let s = sessionStorage.getItem('enchere_browser_session');
+    if (!s) {
+      s = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      sessionStorage.setItem('enchere_browser_session', s);
+    }
+    return s;
+  } catch {
+    return `sess_${Date.now()}`;
+  }
+}
+
 export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, token } = useAuth();
   const [isConnected, setIsConnected] = useState(false);
@@ -98,7 +112,11 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const getLotViewers = useCallback(
     (lotId: number) => {
-      return lotViewersMap[lotId] || 1;
+      // Retourne le nombre exact de sessions consultant ce lot (1 si l'utilisateur est seul sur la fiche)
+      if (lotViewersMap[lotId] !== undefined) {
+        return Math.max(1, lotViewersMap[lotId]);
+      }
+      return 1;
     },
     [lotViewersMap]
   );
@@ -110,7 +128,14 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ clientId, lotId }),
-      }).catch(() => {});
+      })
+        .then((r) => r.json())
+        .then((d) => {
+          if (lotId && d.viewersCount !== undefined) {
+            setLotViewersMap((prev) => ({ ...prev, [lotId]: Math.max(1, d.viewersCount) }));
+          }
+        })
+        .catch(() => {});
     }
   }, [clientId]);
 
@@ -122,8 +147,9 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   }, []);
 
   useEffect(() => {
-    // Connexion SSE
+    // Connexion SSE avec sessionId persistant
     const query = new URLSearchParams();
+    query.set('sessionId', getBrowserSessionId());
     if (token) query.set('token', token);
     if (currentViewingLotRef.current) query.set('lotId', currentViewingLotRef.current.toString());
 

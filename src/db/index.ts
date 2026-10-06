@@ -14,10 +14,10 @@ export const createPool = () => {
       password: process.env.SQL_PASSWORD,
       database: process.env.SQL_DB_NAME,
       max: 10,
-      idleTimeoutMillis: 10000, // Fermer proprement les connexions inactives après 10s pour éviter la rupture abrupte côté serveur
-      connectionTimeoutMillis: 10000,
+      idleTimeoutMillis: 5000, // Fermer rapidement les sockets inactifs avant rupture par le proxy
+      connectionTimeoutMillis: 5000,
       keepAlive: true,
-      keepAliveInitialDelayMillis: 10000,
+      keepAliveInitialDelayMillis: 2000,
     });
 
     global._postgresPool.on('error', (err: any) => {
@@ -42,3 +42,35 @@ export const createPool = () => {
 const pool = createPool();
 
 export const db = drizzle(pool, { schema });
+
+/**
+ * Exécute une opération Drizzle avec réessai automatique en cas de rupture de socket inactif
+ */
+export async function withDbRetry<T>(operation: () => Promise<T>, maxRetries = 2): Promise<T> {
+  let lastError: any;
+  for (let attempt = 0; attempt <= maxRetries; attempt++) {
+    try {
+      return await operation();
+    } catch (err: any) {
+      lastError = err;
+      const msg = err?.message || '';
+      const isConnError =
+        msg.includes('Connection terminated') ||
+        msg.includes('ECONNRESET') ||
+        msg.includes('EPIPE') ||
+        msg.includes('57P01') ||
+        msg.includes('socket') ||
+        msg.includes('terminating connection') ||
+        err?.code === 'ECONNRESET' ||
+        err?.code === '57P01';
+
+      if (isConnError && attempt < maxRetries) {
+        console.warn(`[DB Retry] Reconnexion automatique suite à socket inactif (tentative ${attempt + 1})...`);
+        await new Promise((r) => setTimeout(r, 150 * (attempt + 1)));
+        continue;
+      }
+      throw err;
+    }
+  }
+  throw lastError;
+}

@@ -1,5 +1,5 @@
 import express from 'express';
-import { db } from '../db/index.ts';
+import { db, withDbRetry } from '../db/index.ts';
 import {
   users,
   sales,
@@ -157,7 +157,7 @@ app.post('/api/login', async (req, res) => {
     }
 
     const cleanEmail = String(email).toLowerCase().trim();
-    const userRes = await db.select().from(users).where(eq(users.email, cleanEmail));
+    const userRes = await withDbRetry(() => db.select().from(users).where(eq(users.email, cleanEmail)));
 
     if (userRes.length === 0) {
       return res.status(401).json({
@@ -175,7 +175,7 @@ app.post('/api/login', async (req, res) => {
 
     // Si premier accès sur compte déjà présent (ou compte de démonstration/propriétaire), enregistrer le mot de passe
     if (!user.passwordHash) {
-      await db.update(users).set({ passwordHash: hashed }).where(eq(users.id, user.id));
+      await withDbRetry(() => db.update(users).set({ passwordHash: hashed }).where(eq(users.id, user.id)));
     }
 
     const token = `TOKEN_${Buffer.from(cleanEmail).toString('base64')}`;
@@ -381,7 +381,7 @@ app.get('/api/lots', async (req, res) => {
         .orderBy(asc(lots.endsAt));
     }
 
-    const results = await query;
+    const results = await withDbRetry(() => query);
     let enrichedLots = results.map((l: any) => ({
       ...l,
       userMaxBidCents: null,
@@ -392,16 +392,23 @@ app.get('/api/lots', async (req, res) => {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       try {
         const token = authHeader.split('Bearer ')[1];
-        const { adminAuth } = await import('../lib/firebase-admin.ts');
-        const decoded = await adminAuth.verifyIdToken(token);
-        const userDb = await db.select().from(users).where(eq(users.uid, decoded.uid));
+        let currentUserId: number | undefined;
 
-        if (userDb.length > 0) {
-          const currentUserId = userDb[0].id;
-          const userBids = await db
-            .select()
-            .from(bids)
-            .where(eq(bids.userId, currentUserId));
+        if (token.startsWith('TOKEN_')) {
+          const email = Buffer.from(token.replace(/^TOKEN_/, ''), 'base64').toString('utf-8');
+          const userDb = await withDbRetry(() => db.select().from(users).where(eq(users.email, email)));
+          if (userDb.length > 0) currentUserId = userDb[0].id;
+        } else {
+          const { adminAuth } = await import('../lib/firebase-admin.ts');
+          const decoded = await adminAuth.verifyIdToken(token);
+          const userDb = await withDbRetry(() => db.select().from(users).where(eq(users.uid, decoded.uid)));
+          if (userDb.length > 0) currentUserId = userDb[0].id;
+        }
+
+        if (currentUserId) {
+          const userBids = await withDbRetry(() =>
+            db.select().from(bids).where(eq(bids.userId, currentUserId))
+          );
 
           const userBidsByLot: Record<number, number> = {};
           userBids.forEach((b) => {
@@ -520,7 +527,7 @@ app.get('/api/sales/:id/lots', async (req, res) => {
 app.get('/api/lots/:id', async (req: AuthRequest, res) => {
   try {
     const lotId = parseInt(req.params.id);
-    const lotRes = await db.select().from(lots).where(eq(lots.id, lotId));
+    const lotRes = await withDbRetry(() => db.select().from(lots).where(eq(lots.id, lotId)));
 
     if (lotRes.length === 0) {
       return res.status(404).json({ error: 'Lot introuvable.' });
@@ -529,16 +536,18 @@ app.get('/api/lots/:id', async (req: AuthRequest, res) => {
     const lot = lotRes[0];
 
     // Historique public (anonymisé)
-    const history = await db
-      .select({
-        id: bidHistory.id,
-        publicBidderId: bidHistory.publicBidderId,
-        amountCents: bidHistory.amountCents,
-        createdAt: bidHistory.createdAt,
-      })
-      .from(bidHistory)
-      .where(eq(bidHistory.lotId, lotId))
-      .orderBy(desc(bidHistory.createdAt));
+    const history = await withDbRetry(() =>
+      db
+        .select({
+          id: bidHistory.id,
+          publicBidderId: bidHistory.publicBidderId,
+          amountCents: bidHistory.amountCents,
+          createdAt: bidHistory.createdAt,
+        })
+        .from(bidHistory)
+        .where(eq(bidHistory.lotId, lotId))
+        .orderBy(desc(bidHistory.createdAt))
+    );
 
     // Vérifier si un token auth est présent pour récupérer le montant max confidentiel de ce client
     let userMaxBidCents: number | null = null;
@@ -548,21 +557,32 @@ app.get('/api/lots/:id', async (req: AuthRequest, res) => {
     if (authHeader && authHeader.startsWith('Bearer ')) {
       try {
         const token = authHeader.split('Bearer ')[1];
-        const { adminAuth } = await import('../lib/firebase-admin.ts');
-        const decoded = await adminAuth.verifyIdToken(token);
-        const userDb = await db.select().from(users).where(eq(users.uid, decoded.uid));
+        let currentUserId: number | undefined;
 
-        if (userDb.length > 0) {
-          const userBid = await db
-            .select()
-            .from(bids)
-            .where(and(eq(bids.lotId, lotId), eq(bids.userId, userDb[0].id)))
-            .orderBy(desc(bids.maxBidCents))
-            .limit(1);
+        if (token.startsWith('TOKEN_')) {
+          const email = Buffer.from(token.replace(/^TOKEN_/, ''), 'base64').toString('utf-8');
+          const userDb = await withDbRetry(() => db.select().from(users).where(eq(users.email, email)));
+          if (userDb.length > 0) currentUserId = userDb[0].id;
+        } else {
+          const { adminAuth } = await import('../lib/firebase-admin.ts');
+          const decoded = await adminAuth.verifyIdToken(token);
+          const userDb = await withDbRetry(() => db.select().from(users).where(eq(users.uid, decoded.uid)));
+          if (userDb.length > 0) currentUserId = userDb[0].id;
+        }
+
+        if (currentUserId) {
+          const userBid = await withDbRetry(() =>
+            db
+              .select()
+              .from(bids)
+              .where(and(eq(bids.lotId, lotId), eq(bids.userId, currentUserId)))
+              .orderBy(desc(bids.maxBidCents))
+              .limit(1)
+          );
 
           if (userBid.length > 0) {
             userMaxBidCents = userBid[0].maxBidCents;
-            isWinning = lot.currentWinnerId === userDb[0].id;
+            isWinning = lot.currentWinnerId === currentUserId;
           }
         }
       } catch (e) {
@@ -640,17 +660,24 @@ app.get('/api/realtime/stream', async (req, res) => {
   res.flushHeaders?.();
 
   const clientId = `client_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  const sessionId = (req.query.sessionId as string) || clientId;
   let userId: number | undefined;
 
-  // Détection éventuelle de l'utilisateur connecté via token
+  // Détection éventuelle de l'utilisateur connecté via token (Firebase ou credentials TOKEN_)
   const token = (req.query.token as string) || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split('Bearer ')[1] : undefined);
   if (token) {
     try {
-      const { adminAuth } = await import('../lib/firebase-admin.ts');
-      const decoded = await adminAuth.verifyIdToken(token);
-      const userDb = await db.select().from(users).where(eq(users.uid, decoded.uid));
-      if (userDb.length > 0) {
-        userId = userDb[0].id;
+      if (token.startsWith('TOKEN_')) {
+        const email = Buffer.from(token.replace(/^TOKEN_/, ''), 'base64').toString('utf-8');
+        const userDb = await withDbRetry(() => db.select().from(users).where(eq(users.email, email)));
+        if (userDb.length > 0) userId = userDb[0].id;
+      } else {
+        const { adminAuth } = await import('../lib/firebase-admin.ts');
+        const decoded = await adminAuth.verifyIdToken(token);
+        const userDb = await withDbRetry(() => db.select().from(users).where(eq(users.uid, decoded.uid)));
+        if (userDb.length > 0) {
+          userId = userDb[0].id;
+        }
       }
     } catch {
       // Ignorer si token invalide
@@ -658,7 +685,7 @@ app.get('/api/realtime/stream', async (req, res) => {
   }
 
   const initialLotId = req.query.lotId ? parseInt(req.query.lotId as string) : undefined;
-  realtimeHub.addClient(clientId, res, userId, initialLotId);
+  realtimeHub.addClient(clientId, res, userId, initialLotId, sessionId);
 
   req.on('close', () => {
     realtimeHub.removeClient(clientId);
@@ -671,7 +698,7 @@ app.post('/api/realtime/viewing', (req, res) => {
     realtimeHub.updateViewing(clientId, lotId ? parseInt(lotId) : null);
   }
   const count = lotId ? realtimeHub.getLotViewersCount(parseInt(lotId)) : 0;
-  res.json({ ok: true, viewersCount: Math.max(1, count) });
+  res.json({ ok: true, viewersCount: count });
 });
 
 /* ==========================================================================

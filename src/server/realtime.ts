@@ -2,6 +2,7 @@ import { Response } from 'express';
 
 export interface RealtimeClient {
   id: string;
+  sessionId: string;
   res: Response;
   userId?: number;
   viewingLotId?: number;
@@ -26,9 +27,25 @@ class AuctionRealtimeHub {
     }, 20000);
   }
 
-  public addClient(id: string, res: Response, userId?: number, viewingLotId?: number): void {
+  public addClient(id: string, res: Response, userId?: number, viewingLotId?: number, sessionId?: string): void {
+    const finalSessionId = sessionId || id;
+
+    // Fermer et nettoyer immédiatement toute ancienne connexion fantôme issue de la même session (reconnexion, StrictMode, F5)
+    for (const [existingId, existingClient] of this.clients.entries()) {
+      if (
+        (existingClient.sessionId === finalSessionId || (userId && existingClient.userId === userId)) &&
+        existingId !== id
+      ) {
+        try {
+          existingClient.res.end();
+        } catch {}
+        this.removeClient(existingId);
+      }
+    }
+
     const client: RealtimeClient = {
       id,
+      sessionId: finalSessionId,
       res,
       userId,
       viewingLotId,
@@ -41,11 +58,12 @@ class AuctionRealtimeHub {
       this.updateViewing(id, viewingLotId);
     }
 
-    // Émettre l'état initial de bienvenue
+    // Émettre l'état initial de bienvenue avec nombre réel de sessions uniques connectées
+    const uniqueSessionCount = new Set(Array.from(this.clients.values()).map((c) => c.sessionId)).size;
     this.sendToClient(id, 'connected', {
       clientId: id,
       timestamp: new Date().toISOString(),
-      activeTotalViewers: this.clients.size,
+      activeTotalViewers: Math.max(1, uniqueSessionCount),
     });
   }
 
@@ -57,19 +75,19 @@ class AuctionRealtimeHub {
     if (client.viewingLotId && client.viewingLotId !== lotId) {
       const prevSet = this.lotViewers.get(client.viewingLotId);
       if (prevSet) {
-        prevSet.delete(clientId);
+        prevSet.delete(client.sessionId);
         this.broadcastLotPresence(client.viewingLotId);
       }
     }
 
     client.viewingLotId = lotId || undefined;
 
-    // Ajouter au nouveau lot
+    // Ajouter au nouveau lot par sessionId unique
     if (lotId) {
       if (!this.lotViewers.has(lotId)) {
         this.lotViewers.set(lotId, new Set());
       }
-      this.lotViewers.get(lotId)!.add(clientId);
+      this.lotViewers.get(lotId)!.add(client.sessionId);
       this.broadcastLotPresence(lotId);
     }
   }
@@ -80,7 +98,7 @@ class AuctionRealtimeHub {
       if (client.viewingLotId) {
         const set = this.lotViewers.get(client.viewingLotId);
         if (set) {
-          set.delete(clientId);
+          set.delete(client.sessionId);
           this.broadcastLotPresence(client.viewingLotId);
         }
       }
@@ -96,7 +114,7 @@ class AuctionRealtimeHub {
     const count = this.getLotViewersCount(lotId);
     this.broadcast('lot:presence', {
       lotId,
-      viewersCount: Math.max(1, count),
+      viewersCount: Math.max(0, count),
     });
   }
 
