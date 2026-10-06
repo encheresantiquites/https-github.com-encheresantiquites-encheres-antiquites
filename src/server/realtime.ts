@@ -30,8 +30,8 @@ class AuctionRealtimeHub {
   public addClient(id: string, res: Response, userId?: number, viewingLotId?: number, sessionId?: string): void {
     const finalSessionId = sessionId || id;
 
-    // Fermer et nettoyer immédiatement toute ancienne connexion fantôme issue de la même session (reconnexion, StrictMode, F5)
-    for (const [existingId, existingClient] of this.clients.entries()) {
+    // Fermer et nettoyer immédiatement toute ancienne connexion fantôme issue de la même session (reconnexion, StrictMode, F5, onglets multiples)
+    for (const [existingId, existingClient] of Array.from(this.clients.entries())) {
       if (
         (existingClient.sessionId === finalSessionId || (userId && existingClient.userId === userId)) &&
         existingId !== id
@@ -107,7 +107,28 @@ class AuctionRealtimeHub {
   }
 
   public getLotViewersCount(lotId: number): number {
-    return this.lotViewers.get(lotId)?.size || 0;
+    const viewers = this.lotViewers.get(lotId);
+    if (!viewers || viewers.size === 0) return 0;
+
+    // Récupérer l'ensemble de TOUTES les sessions réellement et actuellement connectées
+    const activeSessionIds = new Set<string>();
+    for (const client of this.clients.values()) {
+      if (client.sessionId) activeSessionIds.add(client.sessionId);
+    }
+
+    // Purger les sessions mortes/anciennes du Set du lot
+    let count = 0;
+    for (const sid of Array.from(viewers)) {
+      if (activeSessionIds.has(sid)) {
+        count++;
+      } else {
+        viewers.delete(sid);
+      }
+    }
+
+    // Le nombre de personnes sur le lot ne peut pas dépasser le nombre total de sessions uniques actives
+    const totalSessions = activeSessionIds.size;
+    return Math.min(count, Math.max(0, totalSessions));
   }
 
   public broadcastLotPresence(lotId: number): void {

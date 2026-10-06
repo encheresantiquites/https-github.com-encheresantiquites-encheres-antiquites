@@ -351,17 +351,27 @@ export async function closeExpiredLot(lotId: number): Promise<void> {
     if (lot.endsAt.getTime() > now.getTime()) return;
 
     if (!lot.currentWinnerId || lot.bidCount === 0) {
-      // Aucun enchérisseur
+      // RÈGLE D'OR : SI OBJET INVENDU (pas d'ENCHÈRES) à la fin du temps imparti (dimanche 22h)
+      // Automatiquement le replacer dans Prochaines enchères !
+      const nextSchedule = getNextStandardLotSchedule(now);
+
       await tx
         .update(lots)
-        .set({ status: 'UNSOLD', updatedAt: now })
+        .set({
+          status: 'SCHEDULED', // Replacé automatiquement dans Prochaines enchères
+          endsAt: nextSchedule.endsAt, // Date de clôture reportée au dimanche suivant à 22h
+          bidCount: 0,
+          currentPriceCents: lot.startingPriceCents,
+          currentWinnerId: null,
+          updatedAt: now,
+        })
         .where(eq(lots.id, lotId));
 
       await tx.insert(auditLogs).values({
-        action: 'CLOSE_LOT_UNSOLD',
+        action: 'RESCHEDULE_UNSOLD_TO_UPCOMING',
         entityType: 'LOT',
         entityId: lot.reference,
-        details: `Lot ${lot.reference} clôturé sans enchère.`,
+        details: `RÈGLE D'OR : Lot ${lot.reference} invendu (0 offre) à la clôture. Automatiquement replacé dans les prochaines enchères (clôture au ${nextSchedule.endsAt.toISOString()}).`,
       });
       return;
     }
@@ -369,16 +379,26 @@ export async function closeExpiredLot(lotId: number): Promise<void> {
     // Vérifier si prix de réserve atteint
     const reservePrice = lot.reservePriceCents || 0;
     if (reservePrice > 0 && lot.currentPriceCents < reservePrice) {
+      // Prix de réserve non atteint : l'objet est invendu -> replacé automatiquement dans les prochaines enchères
+      const nextSchedule = getNextStandardLotSchedule(now);
+
       await tx
         .update(lots)
-        .set({ status: 'RESERVE_NOT_MET', updatedAt: now })
+        .set({
+          status: 'SCHEDULED', // Replacé automatiquement dans Prochaines enchères
+          endsAt: nextSchedule.endsAt,
+          bidCount: 0,
+          currentPriceCents: lot.startingPriceCents,
+          currentWinnerId: null,
+          updatedAt: now,
+        })
         .where(eq(lots.id, lotId));
 
       await tx.insert(auditLogs).values({
-        action: 'CLOSE_LOT_RESERVE_NOT_MET',
+        action: 'RESCHEDULE_UNSOLD_TO_UPCOMING',
         entityType: 'LOT',
         entityId: lot.reference,
-        details: `Lot ${lot.reference} clôturé : prix de réserve non atteint (${(lot.currentPriceCents / 100).toFixed(2)} € vs réserve ${(reservePrice / 100).toFixed(2)} €).`,
+        details: `RÈGLE D'OR : Lot ${lot.reference} invendu (prix de réserve non atteint). Automatiquement replacé dans les prochaines enchères.`,
       });
       return;
     }

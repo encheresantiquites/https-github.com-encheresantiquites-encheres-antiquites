@@ -1,7 +1,7 @@
 export type UserRole = 'CUSTOMER' | 'ADMIN' | 'STAFF' | 'SUPER_ADMIN';
 export type UserStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED' | 'BLOCKED';
 export type SaleStatus = 'DRAFT' | 'SCHEDULED' | 'LIVE' | 'CLOSED' | 'CANCELLED';
-export type LotStatus = 'DRAFT' | 'SCHEDULED' | 'ACTIVE' | 'SOLD' | 'RESERVE_NOT_MET' | 'UNSOLD' | 'CANCELLED';
+export type LotStatus = 'DRAFT' | 'SCHEDULED' | 'ACTIVE' | 'SOLD' | 'CLOSED' | 'PASSED' | 'RESERVE_NOT_MET' | 'UNSOLD' | 'CANCELLED';
 export type OrderStatus =
   | 'AWAITING_PAYMENT'
   | 'PAID'

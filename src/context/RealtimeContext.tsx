@@ -79,13 +79,13 @@ function playTone(type: 'outbid' | 'winning') {
   }
 }
 
-// Identifiant de session navigateur stable (évite de compter plusieurs fois le même utilisateur)
+// Identifiant de session navigateur stable (évite de compter plusieurs fois le même utilisateur s'il ouvre plusieurs onglets)
 function getBrowserSessionId(): string {
   try {
-    let s = sessionStorage.getItem('enchere_browser_session');
+    let s = localStorage.getItem('enchere_device_session_id');
     if (!s) {
-      s = `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
-      sessionStorage.setItem('enchere_browser_session', s);
+      s = sessionStorage.getItem('enchere_browser_session') || `sess_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+      localStorage.setItem('enchere_device_session_id', s);
     }
     return s;
   } catch {
@@ -112,13 +112,15 @@ export const RealtimeProvider: React.FC<{ children: React.ReactNode }> = ({ chil
 
   const getLotViewers = useCallback(
     (lotId: number) => {
-      // Retourne le nombre exact de sessions consultant ce lot (1 si l'utilisateur est seul sur la fiche)
+      // Retourne le nombre exact de sessions consultant ce lot (1 si l'utilisateur est seul sur le site ou la fiche)
       if (lotViewersMap[lotId] !== undefined) {
-        return Math.max(1, lotViewersMap[lotId]);
+        const val = lotViewersMap[lotId];
+        const maxLimit = Math.max(1, activeViewersCount);
+        return Math.min(Math.max(1, val), maxLimit);
       }
       return 1;
     },
-    [lotViewersMap]
+    [lotViewersMap, activeViewersCount]
   );
 
   const setViewingLot = useCallback((lotId: number | null) => {

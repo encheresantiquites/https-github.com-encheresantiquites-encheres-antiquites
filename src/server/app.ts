@@ -26,10 +26,12 @@ app.use(express.json());
 // Background tick to auto-close expired lots
 setInterval(async () => {
   try {
-    const expiredActiveLots = await db
-      .select({ id: lots.id })
-      .from(lots)
-      .where(and(eq(lots.status, 'ACTIVE'), sql`${lots.endsAt} <= NOW()`));
+    const expiredActiveLots = await withDbRetry(() =>
+      db
+        .select({ id: lots.id })
+        .from(lots)
+        .where(and(eq(lots.status, 'ACTIVE'), sql`${lots.endsAt} <= NOW()`))
+    );
 
     for (const item of expiredActiveLots) {
       await closeExpiredLot(item.id);
@@ -291,9 +293,26 @@ app.post('/api/register', async (req, res) => {
 app.get('/api/lots', async (req, res) => {
   try {
     const filter = (req.query.filter as string) || 'current';
+
+    // RÈGLE D'OR : vérifier et traiter immédiatement tout lot dont le temps est imparti
+    try {
+      const expiredActiveLots = await withDbRetry(() =>
+        db
+          .select({ id: lots.id })
+          .from(lots)
+          .where(and(eq(lots.status, 'ACTIVE'), sql`${lots.endsAt} <= NOW()`))
+      );
+      for (const item of expiredActiveLots) {
+        await closeExpiredLot(item.id);
+      }
+    } catch (e) {
+      console.warn('Check expired lots on GET /api/lots warning:', e);
+    }
+
     let query;
 
     if (filter === 'ended') {
+      // Enchères terminées (uniquement les objets vendus ou clos ayant eu des enchères)
       query = db
         .select({
           id: lots.id,
@@ -320,13 +339,12 @@ app.get('/api/lots', async (req, res) => {
         .where(
           or(
             eq(lots.status, 'SOLD'),
-            eq(lots.status, 'CLOSED'),
-            eq(lots.status, 'UNSOLD'),
-            eq(lots.status, 'RESERVE_NOT_MET')
+            eq(lots.status, 'CLOSED')
           )
         )
         .orderBy(desc(lots.endsAt));
     } else if (filter === 'upcoming') {
+      // Prochaines enchères (inclut les objets invendus automatiquement replacés)
       query = db
         .select({
           id: lots.id,
@@ -350,10 +368,16 @@ app.get('/api/lots', async (req, res) => {
           images: lots.images,
         })
         .from(lots)
-        .where(or(eq(lots.status, 'DRAFT'), eq(lots.status, 'SCHEDULED')))
+        .where(
+          or(
+            eq(lots.status, 'DRAFT'),
+            eq(lots.status, 'SCHEDULED'),
+            eq(lots.status, 'UPCOMING')
+          )
+        )
         .orderBy(asc(lots.endsAt));
     } else {
-      // current (en cours)
+      // current (en cours d'enchère active)
       query = db
         .select({
           id: lots.id,

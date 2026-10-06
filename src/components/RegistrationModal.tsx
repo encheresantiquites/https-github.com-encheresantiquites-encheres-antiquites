@@ -200,6 +200,7 @@ export const RegistrationModal: React.FC<RegistrationModalProps> = ({ onClose, o
                   <input
                     type="email"
                     required
+                    autoComplete="email"
                     placeholder="contact@antiquites.fr"
                     value={form.email}
                     onChange={(e) => setForm({ ...form, email: e.target.value })}
@@ -211,6 +212,7 @@ export const RegistrationModal: React.FC<RegistrationModalProps> = ({ onClose, o
                   <input
                     type="password"
                     required
+                    autoComplete="new-password"
                     placeholder="Au moins 4 caractères"
                     value={form.password}
                     onChange={(e) => setForm({ ...form, password: e.target.value })}

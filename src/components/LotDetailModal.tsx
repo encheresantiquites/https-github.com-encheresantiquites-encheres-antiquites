@@ -55,6 +55,14 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
   const viewersCount = getLotViewers(lotId);
   const isFav = isFavorite(lotId);
   const [lot, setLot] = useState<Lot | null>(null);
+  const isClosed = Boolean(
+    lot &&
+      (lot.status === 'SOLD' ||
+        lot.status === 'CLOSED' ||
+        lot.status === 'PASSED' ||
+        lot.status === 'UNSOLD' ||
+        (lot.status === 'ACTIVE' && new Date(lot.endsAt).getTime() <= Date.now()))
+  );
   const [history, setHistory] = useState<BidHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
@@ -349,21 +357,28 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
             <span className="font-mono text-xs font-semibold px-2.5 py-1 rounded bg-[#0B132B] text-[#D4AF37] border border-[#D4AF37]/30">
               {lot.reference}
             </span>
-            {/* Live presence indicator */}
-            <span
-              className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 shadow-sm"
-              title={
-                viewersCount <= 1
-                  ? 'Vous êtes actuellement la seule personne à consulter cette pièce'
-                  : `${viewersCount} personnes consultent simultanément cette fiche en direct`
-              }
-            >
-              <span className="relative flex h-2 w-2">
-                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
-                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+            {/* Live presence indicator ou badge Clôturé */}
+            {isClosed ? (
+              <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-slate-800 text-amber-300 border border-slate-700 shadow-sm">
+                <Lock className="w-3 h-3 text-amber-400" />
+                <span>Enchères closes</span>
               </span>
-              <span>{viewersCount <= 1 ? '1 en direct' : `${viewersCount} en direct`}</span>
-            </span>
+            ) : (
+              <span
+                className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 shadow-sm"
+                title={
+                  viewersCount <= 1
+                    ? 'Vous êtes actuellement la seule personne à consulter cette pièce'
+                    : `${viewersCount} personnes consultent simultanément cette fiche en direct`
+                }
+              >
+                <span className="relative flex h-2 w-2">
+                  <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                  <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+                </span>
+                <span>{viewersCount <= 1 ? '1 en direct' : `${viewersCount} en direct`}</span>
+              </span>
+            )}
           </div>
 
           <div className="flex items-center gap-2">
@@ -486,8 +501,18 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                 {lot.title}
               </h1>
 
-              {/* Countdown Timer or Upcoming Notice */}
-              {lot.status === 'DRAFT' || lot.status === 'SCHEDULED' ? (
+              {/* Countdown Timer or Closed / Upcoming Notice */}
+              {isClosed ? (
+                <div className="mt-4 bg-[#1C2541]/90 rounded-xl p-4 border border-slate-700/80 flex items-center gap-3 text-slate-200 shadow-md">
+                  <div className="w-10 h-10 rounded-lg bg-[#0B132B] border border-slate-700 flex items-center justify-center shrink-0">
+                    <Lock className="w-5 h-5 text-amber-400" />
+                  </div>
+                  <div>
+                    <span className="text-[11px] uppercase tracking-wider text-slate-400 block font-semibold">Statut de la vente</span>
+                    <span className="font-serif font-bold text-base text-amber-200">Enchère(s) clôturée(s)</span>
+                  </div>
+                </div>
+              ) : lot.status === 'DRAFT' || lot.status === 'SCHEDULED' ? (
                 <div className="mt-4 bg-[#1C2541]/90 rounded-xl p-4 border border-[#D4AF37]/40 flex items-center gap-3 text-amber-200 shadow-md">
                   <div className="w-10 h-10 rounded-lg bg-[#0B132B] border border-[#D4AF37]/40 flex items-center justify-center shrink-0">
                     <Calendar className="w-5 h-5 text-[#D4AF37]" />
@@ -504,7 +529,7 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               )}
 
               {/* Flash enchère instantanée en direct */}
-              {liveBidFlash && (
+              {!isClosed && liveBidFlash && (
                 <div className="mt-4 p-3 rounded-xl bg-gradient-to-r from-amber-950/90 via-amber-900/80 to-[#1C2541] border border-amber-400 text-amber-100 flex items-center justify-between text-xs sm:text-sm shadow-xl animate-in fade-in slide-in-from-top-1">
                   <div className="flex items-center gap-2">
                     <span className="text-base animate-pulse">⚡</span>
@@ -522,14 +547,18 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               <div className="mt-4 bg-[#1C2541] rounded-xl p-4 border border-[#D4AF37]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <span className="text-xs uppercase tracking-wider text-slate-400 font-medium">
-                    {lot.bidCount === 0 ? 'Mise à prix' : 'Enchère actuelle'}
+                    {isClosed
+                      ? 'Enchère(s) clôturée(s)'
+                      : lot.bidCount === 0
+                      ? 'Mise à prix'
+                      : 'Enchère actuelle'}
                   </span>
                   <div className="flex items-center gap-2.5 flex-wrap mt-0.5">
                     <div className="text-2xl sm:text-3xl font-bold font-serif text-[#D4AF37]">
                       {formatEuro(lot.currentPriceCents)}
                     </div>
-                    {/* Badge à côté de son enchère */}
-                    {lot.userMaxBidCents && (
+                    {/* Badge à côté de son enchère si en cours */}
+                    {!isClosed && lot.userMaxBidCents && (
                       lot.isWinning ? (
                         <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-950/90 border border-emerald-400 text-emerald-200 shadow-md">
                           <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
@@ -544,30 +573,46 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                     )}
                   </div>
                   <span className="text-xs text-slate-400 mt-0.5 block">
-                    {lot.bidCount} {lot.bidCount > 1 ? 'offres enregistrées' : 'offre'}
+                    {isClosed
+                      ? lot.bidCount > 0
+                        ? `Adjugé pour ${formatEuro(lot.currentPriceCents)} (${lot.bidCount} ${lot.bidCount > 1 ? 'offres enregistrées' : 'offre'})`
+                        : 'Clôturé sans offre'
+                      : `${lot.bidCount} ${lot.bidCount > 1 ? 'offres enregistrées' : 'offre'}`}
                   </span>
                 </div>
 
-                <div className="text-right sm:text-right">
-                  <span className="text-xs uppercase tracking-wider text-slate-400">
-                    Prochaine offre min.
-                  </span>
-                  <div className="text-lg font-mono font-bold text-amber-200">
-                    {formatEuro(minRequiredCents)}
+                {isClosed ? (
+                  <div className="text-right sm:text-right">
+                    <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-bold bg-slate-800 text-amber-300 border border-amber-500/30">
+                      <Lock className="w-3.5 h-3.5 text-amber-400" />
+                      <span>Vente clôturée</span>
+                    </span>
+                    <div className="text-[11px] text-slate-400 mt-1">
+                      {lot.endsAt ? `Clôturée le ${new Date(lot.endsAt).toLocaleDateString('fr-FR', { day: 'numeric', month: 'long', year: 'numeric' })}` : 'Vente terminée'}
+                    </div>
                   </div>
-                  <button
-                    type="button"
-                    onClick={() => setShowIncrementsTable((v) => !v)}
-                    className="text-[11px] text-[#D4AF37] hover:underline flex items-center sm:justify-end gap-1 mt-0.5 cursor-pointer"
-                  >
-                    <HelpCircle className="w-3 h-3" />
-                    <span>Palier +{minIncCents / 100} € (voir barème)</span>
-                  </button>
-                </div>
+                ) : (
+                  <div className="text-right sm:text-right">
+                    <span className="text-xs uppercase tracking-wider text-slate-400">
+                      Prochaine offre min.
+                    </span>
+                    <div className="text-lg font-mono font-bold text-amber-200">
+                      {formatEuro(minRequiredCents)}
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setShowIncrementsTable((v) => !v)}
+                      className="text-[11px] text-[#D4AF37] hover:underline flex items-center sm:justify-end gap-1 mt-0.5 cursor-pointer"
+                    >
+                      <HelpCircle className="w-3 h-3" />
+                      <span>Palier +{minIncCents / 100} € (voir barème)</span>
+                    </button>
+                  </div>
+                )}
               </div>
 
               {/* Panneau explicatif des paliers d'enchères */}
-              {showIncrementsTable && (
+              {!isClosed && showIncrementsTable && (
                 <div className="mt-3 bg-[#0B132B] border border-[#D4AF37]/50 rounded-xl p-3.5 text-xs text-slate-300 space-y-2 animate-in fade-in">
                   <div className="flex items-center justify-between border-b border-slate-800 pb-2">
                     <span className="font-serif font-bold text-amber-200 text-xs">
@@ -612,7 +657,7 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               )}
 
               {/* User Bidding Status Message */}
-              {lot.userMaxBidCents && (
+              {!isClosed && lot.userMaxBidCents && (
                 <div
                   className={`mt-3 p-3.5 rounded-xl border text-xs sm:text-sm flex items-center gap-3 shadow-md ${
                     lot.isWinning
@@ -653,7 +698,7 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               )}
 
               {/* Bidding Feedback Messages - Flash response right after submitting */}
-              {bidFeedback && (
+              {!isClosed && bidFeedback && (
                 bidFeedback.type === 'WINNING' ? (
                   <div className="mt-3 p-4 rounded-xl bg-gradient-to-r from-emerald-950 via-[#1C2541] to-slate-900 border-2 border-emerald-400 text-emerald-100 text-xs sm:text-sm space-y-2 shadow-xl animate-in fade-in">
                     <div className="flex items-center gap-2 font-bold text-emerald-300 text-sm sm:text-base">
@@ -705,8 +750,23 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                 </div>
               )}
 
+              {/* Message Enchères clôturées - suppression totale de la possibilité d'enchérir */}
+              {isClosed && (
+                <div className="mt-4 pt-4 border-t border-slate-800">
+                  <div className="bg-[#1C2541]/70 border border-slate-700/80 rounded-xl p-5 text-center">
+                    <Lock className="w-6 h-6 text-amber-400 mx-auto mb-2" />
+                    <p className="text-sm font-serif font-bold text-slate-100 mb-1">
+                      Enchère(s) clôturée(s)
+                    </p>
+                    <p className="text-xs text-slate-400 max-w-md mx-auto">
+                      La vente pour cet objet est définitivement terminée. Les enchères ne sont plus acceptées.
+                    </p>
+                  </div>
+                </div>
+              )}
+
               {/* Bidding Console Form */}
-              {lot.status === 'ACTIVE' && (
+              {!isClosed && lot.status === 'ACTIVE' && (
                 <div className="mt-4 pt-4 border-t border-slate-800">
                   {!user ? (
                     <div className="bg-slate-900/90 border border-slate-700 rounded-xl p-4 text-center">
@@ -798,7 +858,7 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               )}
 
               {/* Console for Upcoming Lots */}
-              {(lot.status === 'DRAFT' || lot.status === 'SCHEDULED') && (
+              {!isClosed && (lot.status === 'DRAFT' || lot.status === 'SCHEDULED') && (
                 <div className="mt-4 pt-4 border-t border-slate-800">
                   <div className="bg-[#1C2541]/70 border border-[#D4AF37]/30 rounded-xl p-5 text-center">
                     <Calendar className="w-6 h-6 text-[#D4AF37] mx-auto mb-2" />
@@ -824,32 +884,34 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                 </div>
               )}
 
-              {/* Direct Question / Chat with Seller */}
-              <div className="mt-3 bg-[#0B132B]/80 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 shadow-inner">
-                <div className="flex items-center gap-2 text-xs text-slate-300">
-                  <MessageSquare className="w-4 h-4 text-[#D4AF37]" />
-                  <span>Une question sur cet objet ?</span>
+              {/* Direct Question / Chat with Seller - suppression totale de la possibilité de contacter par chat sur les enchères clôturées */}
+              {!isClosed && (
+                <div className="mt-3 bg-[#0B132B]/80 border border-slate-800 rounded-xl p-3 flex flex-wrap items-center justify-between gap-2 shadow-inner">
+                  <div className="flex items-center gap-2 text-xs text-slate-300">
+                    <MessageSquare className="w-4 h-4 text-[#D4AF37]" />
+                    <span>Une question sur cet objet ?</span>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      if (lot) {
+                        openChat({
+                          id: lot.id,
+                          reference: lot.reference,
+                          title: lot.title,
+                          image: lot.images && lot.images[0] ? lot.images[0] : undefined,
+                          startingPriceCents: lot.startingPriceCents,
+                        });
+                      } else {
+                        openChat();
+                      }
+                    }}
+                    className="text-xs bg-[#1C2541] hover:bg-[#253256] text-[#D4AF37] border border-[#D4AF37]/40 px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
+                  >
+                    <span>Poser une question (Chat EN LIGNE 9h–17h)</span>
+                  </button>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => {
-                    if (lot) {
-                      openChat({
-                        id: lot.id,
-                        reference: lot.reference,
-                        title: lot.title,
-                        image: lot.images && lot.images[0] ? lot.images[0] : undefined,
-                        startingPriceCents: lot.startingPriceCents,
-                      });
-                    } else {
-                      openChat();
-                    }
-                  }}
-                  className="text-xs bg-[#1C2541] hover:bg-[#253256] text-[#D4AF37] border border-[#D4AF37]/40 px-3 py-1.5 rounded-lg font-semibold flex items-center gap-1.5 transition-colors cursor-pointer"
-                >
-                  <span>Poser une question (Chat EN LIGNE 9h–17h)</span>
-                </button>
-              </div>
+              )}
             </div>
 
             {/* Metadata Tabs */}

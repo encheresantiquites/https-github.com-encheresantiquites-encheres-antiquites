@@ -31,6 +31,7 @@ export const LotCard: React.FC<LotCardProps> = ({ lot, onSelect }) => {
   const isUpcoming = lot.status === 'DRAFT' || lot.status === 'SCHEDULED';
   const isSold = lot.status === 'SOLD';
   const isUnsold = lot.status === 'UNSOLD' || lot.status === 'RESERVE_NOT_MET';
+  const isClosed = isSold || lot.status === 'CLOSED' || (!isUpcoming && new Date(lot.endsAt).getTime() <= Date.now());
 
   return (
     <div
@@ -121,7 +122,7 @@ export const LotCard: React.FC<LotCardProps> = ({ lot, onSelect }) => {
         <div className="mt-3 pt-2.5 border-t border-slate-800 flex items-end justify-between">
           <div>
             <div className="text-[9px] uppercase tracking-wider text-slate-400 font-medium">
-              {lot.bidCount === 0 ? 'Mise à prix' : 'Enchère actuelle'}
+              {isClosed ? 'Enchère(s) clôturée(s)' : isUpcoming || lot.bidCount === 0 ? 'Mise à prix' : 'Enchère actuelle'}
             </div>
             <div className="text-lg sm:text-xl font-bold font-serif text-[#D4AF37] tracking-tight">
               {formatEuro(lot.currentPriceCents)}
