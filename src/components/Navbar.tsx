@@ -1,5 +1,7 @@
 import React from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
+import { useRealtime } from '../context/RealtimeContext.tsx';
+import { usePWAInstall } from '../hooks/usePWAInstall.ts';
 import {
   Gavel,
   ShieldCheck,
@@ -10,6 +12,8 @@ import {
   Info,
   Clock,
   Sparkles,
+  Bell,
+  Smartphone,
 } from 'lucide-react';
 
 interface NavbarProps {
@@ -17,6 +21,8 @@ interface NavbarProps {
   setCurrentTab: (tab: 'home' | 'customer' | 'admin') => void;
   onOpenHowItWorks: () => void;
   onOpenLogin: () => void;
+  onOpenInstallModal?: () => void;
+  onOpenNotificationsModal?: () => void;
 }
 
 export const Navbar: React.FC<NavbarProps> = ({
@@ -24,8 +30,12 @@ export const Navbar: React.FC<NavbarProps> = ({
   setCurrentTab,
   onOpenHowItWorks,
   onOpenLogin,
+  onOpenInstallModal,
+  onOpenNotificationsModal,
 }) => {
   const { user, logout } = useAuth();
+  const { isConnected, activeViewersCount } = useRealtime();
+  const { isInstalled } = usePWAInstall();
 
   const getStatusBadge = () => {
     if (!user) return null;
@@ -78,6 +88,13 @@ export const Navbar: React.FC<NavbarProps> = ({
             <span className="block font-serif text-xl sm:text-2xl font-bold tracking-wider text-amber-100 group-hover:text-amber-200 transition-colors">
               Enchères-Antiquités
             </span>
+            <div className="flex items-center gap-1.5 text-[10px] text-emerald-400 font-medium">
+              <span className="relative flex h-1.5 w-1.5">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-1.5 w-1.5 bg-emerald-500"></span>
+              </span>
+              <span>En direct multi-utilisateurs ({activeViewersCount} connectés)</span>
+            </div>
           </div>
         </div>
 
@@ -146,7 +163,32 @@ export const Navbar: React.FC<NavbarProps> = ({
         </nav>
 
         {/* User / Authentication actions */}
-        <div className="flex items-center gap-3">
+        <div className="flex items-center gap-2 sm:gap-3">
+          {/* Bouton Cloche / Notifications */}
+          {onOpenNotificationsModal && (
+            <button
+              type="button"
+              onClick={onOpenNotificationsModal}
+              className="p-2 rounded-lg bg-[#1C2541] hover:bg-slate-800 text-amber-300 hover:text-white border border-[#D4AF37]/30 transition-colors cursor-pointer relative"
+              title="Régler mes alertes et notifications par objet"
+            >
+              <Bell className="w-4 h-4" />
+              <span className="absolute top-1 right-1 w-2 h-2 rounded-full bg-amber-400"></span>
+            </button>
+          )}
+
+          {/* Bouton Installer l'application */}
+          {!isInstalled && onOpenInstallModal && (
+            <button
+              type="button"
+              onClick={onOpenInstallModal}
+              className="hidden sm:flex items-center gap-1.5 bg-[#1C2541] hover:bg-[#D4AF37] text-amber-200 hover:text-slate-950 px-3 py-1.5 rounded-lg text-xs font-semibold border border-[#D4AF37]/40 shadow transition-all cursor-pointer"
+            >
+              <Smartphone className="w-3.5 h-3.5" />
+              <span>Installer l'app</span>
+            </button>
+          )}
+
           {/* Visible on mobile if not in desktop nav */}
           <button
             onClick={onOpenHowItWorks}

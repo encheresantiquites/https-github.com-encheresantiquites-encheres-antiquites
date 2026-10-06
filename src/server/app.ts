@@ -18,6 +18,7 @@ import { requireAuth, requireAdmin, requireApprovedBidder, optionalAuth, AuthReq
 import { placeProxyBid, closeExpiredLot, getNextStandardLotSchedule } from './auction-engine.ts';
 import { createPayPalOrder, captureAndVerifyPayPalPayment } from './paypal.ts';
 import { getChatScheduleStatus } from '../lib/chat-schedule.ts';
+import { realtimeHub } from './realtime.ts';
 
 export const app = express();
 app.use(express.json());
@@ -310,6 +311,7 @@ app.get('/api/lots', async (req, res) => {
           startingPriceCents: lots.startingPriceCents,
           currentPriceCents: lots.currentPriceCents,
           bidCount: lots.bidCount,
+          currentWinnerId: lots.currentWinnerId,
           status: lots.status,
           endsAt: lots.endsAt,
           images: lots.images,
@@ -342,6 +344,7 @@ app.get('/api/lots', async (req, res) => {
           startingPriceCents: lots.startingPriceCents,
           currentPriceCents: lots.currentPriceCents,
           bidCount: lots.bidCount,
+          currentWinnerId: lots.currentWinnerId,
           status: lots.status,
           endsAt: lots.endsAt,
           images: lots.images,
@@ -368,6 +371,7 @@ app.get('/api/lots', async (req, res) => {
           startingPriceCents: lots.startingPriceCents,
           currentPriceCents: lots.currentPriceCents,
           bidCount: lots.bidCount,
+          currentWinnerId: lots.currentWinnerId,
           status: lots.status,
           endsAt: lots.endsAt,
           images: lots.images,
@@ -378,7 +382,50 @@ app.get('/api/lots', async (req, res) => {
     }
 
     const results = await query;
-    res.json({ lots: results });
+    let enrichedLots = results.map((l: any) => ({
+      ...l,
+      userMaxBidCents: null,
+      isWinning: false,
+    }));
+
+    const authHeader = req.headers.authorization;
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      try {
+        const token = authHeader.split('Bearer ')[1];
+        const { adminAuth } = await import('../lib/firebase-admin.ts');
+        const decoded = await adminAuth.verifyIdToken(token);
+        const userDb = await db.select().from(users).where(eq(users.uid, decoded.uid));
+
+        if (userDb.length > 0) {
+          const currentUserId = userDb[0].id;
+          const userBids = await db
+            .select()
+            .from(bids)
+            .where(eq(bids.userId, currentUserId));
+
+          const userBidsByLot: Record<number, number> = {};
+          userBids.forEach((b) => {
+            if (!userBidsByLot[b.lotId] || b.maxBidCents > userBidsByLot[b.lotId]) {
+              userBidsByLot[b.lotId] = b.maxBidCents;
+            }
+          });
+
+          enrichedLots = results.map((l: any) => {
+            const maxBid = userBidsByLot[l.id] || null;
+            const isWinner = maxBid !== null && l.currentWinnerId === currentUserId;
+            return {
+              ...l,
+              userMaxBidCents: maxBid,
+              isWinning: isWinner,
+            };
+          });
+        }
+      } catch (e) {
+        // Ignorer si token invalide
+      }
+    }
+
+    res.json({ lots: enrichedLots });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -515,7 +562,7 @@ app.get('/api/lots/:id', async (req: AuthRequest, res) => {
 
           if (userBid.length > 0) {
             userMaxBidCents = userBid[0].maxBidCents;
-            isWinning = userBid[0].isWinning;
+            isWinning = lot.currentWinnerId === userDb[0].id;
           }
         }
       } catch (e) {
@@ -578,6 +625,53 @@ app.post('/api/lots/:id/bid', requireAuth, requireApprovedBidder, async (req: Au
     console.error('Erreur placement enchère:', err);
     res.status(500).json({ error: err.message || 'Erreur lors du traitement de l’enchère.' });
   }
+});
+
+/* ==========================================================================
+   REALTIME MULTI-USER SSE STREAM (ENCHÈRES EN DIRECT INSTANTANÉES)
+   ========================================================================== */
+
+app.get('/api/realtime/stream', async (req, res) => {
+  // SSE Headers
+  res.setHeader('Content-Type', 'text/event-stream');
+  res.setHeader('Cache-Control', 'no-cache, no-transform');
+  res.setHeader('Connection', 'keep-alive');
+  res.setHeader('X-Accel-Buffering', 'no');
+  res.flushHeaders?.();
+
+  const clientId = `client_${Date.now()}_${Math.random().toString(36).substring(2, 9)}`;
+  let userId: number | undefined;
+
+  // Détection éventuelle de l'utilisateur connecté via token
+  const token = (req.query.token as string) || (req.headers.authorization?.startsWith('Bearer ') ? req.headers.authorization.split('Bearer ')[1] : undefined);
+  if (token) {
+    try {
+      const { adminAuth } = await import('../lib/firebase-admin.ts');
+      const decoded = await adminAuth.verifyIdToken(token);
+      const userDb = await db.select().from(users).where(eq(users.uid, decoded.uid));
+      if (userDb.length > 0) {
+        userId = userDb[0].id;
+      }
+    } catch {
+      // Ignorer si token invalide
+    }
+  }
+
+  const initialLotId = req.query.lotId ? parseInt(req.query.lotId as string) : undefined;
+  realtimeHub.addClient(clientId, res, userId, initialLotId);
+
+  req.on('close', () => {
+    realtimeHub.removeClient(clientId);
+  });
+});
+
+app.post('/api/realtime/viewing', (req, res) => {
+  const { clientId, lotId } = req.body;
+  if (clientId) {
+    realtimeHub.updateViewing(clientId, lotId ? parseInt(lotId) : null);
+  }
+  const count = lotId ? realtimeHub.getLotViewersCount(parseInt(lotId)) : 0;
+  res.json({ ok: true, viewersCount: Math.max(1, count) });
 });
 
 /* ==========================================================================

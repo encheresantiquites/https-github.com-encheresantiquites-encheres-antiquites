@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { AuthProvider, useAuth } from './context/AuthContext.tsx';
 import { FavoritesProvider } from './context/FavoritesContext.tsx';
 import { ChatProvider } from './context/ChatContext.tsx';
+import { RealtimeProvider, useRealtime } from './context/RealtimeContext.tsx';
+import { NotificationProvider, useNotifications } from './context/NotificationContext.tsx';
 import { Navbar } from './components/Navbar.tsx';
 import { LotCard } from './components/LotCard.tsx';
 import { LotDetailModal } from './components/LotDetailModal.tsx';
@@ -11,6 +13,9 @@ import { CustomerSpace } from './components/CustomerSpace.tsx';
 import { AdminBackoffice } from './components/AdminBackoffice.tsx';
 import { LoginModal } from './components/LoginModal.tsx';
 import { LiveChatWidget } from './components/LiveChatWidget.tsx';
+import { PWAInstallBanner } from './components/PWAInstallBanner.tsx';
+import { PWAInstallModal } from './components/PWAInstallModal.tsx';
+import { NotificationPreferencesModal } from './components/NotificationPreferencesModal.tsx';
 import { Lot } from './types/index.ts';
 import {
   Gavel,
@@ -28,7 +33,9 @@ import {
 type LotFilter = 'current' | 'ended' | 'upcoming';
 
 function AppContent() {
-  const { user } = useAuth();
+  const { user, token } = useAuth();
+  const { lastBidEvent, isConnected, activeViewersCount } = useRealtime();
+  const { checkLotsAlerts, setIsModalOpen: setIsNotificationModalOpen } = useNotifications();
   const [currentTab, setCurrentTab] = useState<'home' | 'customer' | 'admin'>('home');
   const [lots, setLots] = useState<Lot[]>([]);
   const [selectedLot, setSelectedLot] = useState<Lot | null>(null);
@@ -36,6 +43,7 @@ function AppContent() {
   const [registerOpen, setRegisterOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
   const [loadingLots, setLoadingLots] = useState(true);
+  const [pwaModalOpen, setPwaModalOpen] = useState(false);
 
   // Strictly 3 tabs as requested by the user: "enchère en cours", "enchères terminées", "Prochaine enchères"
   const [lotFilter, setLotFilter] = useState<LotFilter>('current');
@@ -43,7 +51,11 @@ function AppContent() {
   const loadLots = async (filter: LotFilter) => {
     try {
       setLoadingLots(true);
-      const res = await fetch(`/api/lots?filter=${filter}`);
+      const headers: Record<string, string> = {};
+      if (token) {
+        headers['Authorization'] = `Bearer ${token}`;
+      }
+      const res = await fetch(`/api/lots?filter=${filter}`, { headers });
       if (res.ok) {
         const data = await res.json();
         setLots(data.lots || []);
@@ -57,7 +69,50 @@ function AppContent() {
 
   useEffect(() => {
     loadLots(lotFilter);
-  }, [lotFilter]);
+  }, [lotFilter, token]);
+
+  // Si l'utilisateur clique sur une notification de lot (/?lotId=...), ouvrir directement la fiche du lot
+  useEffect(() => {
+    const params = new URLSearchParams(window.location.search);
+    const lotIdParam = params.get('lotId');
+    if (lotIdParam && lots.length > 0) {
+      const found = lots.find((l) => l.id === parseInt(lotIdParam));
+      if (found) {
+        setSelectedLot(found);
+      }
+    }
+  }, [lots]);
+
+  // Vérification périodique des alertes (dernière heure de vente, favoris expirants)
+  useEffect(() => {
+    if (lots.length > 0) {
+      checkLotsAlerts(lots);
+      const interval = setInterval(() => {
+        checkLotsAlerts(lots);
+      }, 60000);
+      return () => clearInterval(interval);
+    }
+  }, [lots, checkLotsAlerts]);
+
+  // Synchronisation multi-utilisateurs instantanée : mise à jour immédiate sur chaque téléphone
+  useEffect(() => {
+    if (!lastBidEvent) return;
+    setLots((prevLots) =>
+      prevLots.map((l) => {
+        if (l.id === lastBidEvent.lotId) {
+          const isWinner = user ? lastBidEvent.winningUserId === user.id : false;
+          return {
+            ...l,
+            currentPriceCents: lastBidEvent.currentPriceCents,
+            bidCount: lastBidEvent.bidCount,
+            endsAt: lastBidEvent.endsAt,
+            isWinning: isWinner,
+          };
+        }
+        return l;
+      })
+    );
+  }, [lastBidEvent, user]);
 
   return (
     <div className="min-h-screen bg-[#070B19] text-slate-100 flex flex-col font-sans selection:bg-[#D4AF37] selection:text-slate-950">
@@ -67,6 +122,8 @@ function AppContent() {
         setCurrentTab={setCurrentTab}
         onOpenHowItWorks={() => setHowItWorksOpen(true)}
         onOpenLogin={() => setLoginOpen(true)}
+        onOpenInstallModal={() => setPwaModalOpen(true)}
+        onOpenNotificationsModal={() => setIsNotificationModalOpen(true)}
       />
 
       {/* Main Tab Views with Return Buttons */}
@@ -125,6 +182,12 @@ function AppContent() {
               </div>
             </div>
           </section>
+
+          {/* Bannière PWA & Notifications d'alertes */}
+          <PWAInstallBanner
+            onOpenInstallModal={() => setPwaModalOpen(true)}
+            onOpenNotificationsModal={() => setIsNotificationModalOpen(true)}
+          />
 
           {/* Catalog Section with the 3 requested tabs */}
           <section id="catalogue" className="pt-6 pb-12 md:pt-8 md:pb-16">
@@ -373,6 +436,16 @@ function AppContent() {
         />
       )}
 
+      {/* PWA Mobile Installation Modal */}
+      <PWAInstallModal
+        isOpen={pwaModalOpen}
+        onClose={() => setPwaModalOpen(false)}
+        onOpenNotifications={() => setIsNotificationModalOpen(true)}
+      />
+
+      {/* Notification Preferences Modal */}
+      <NotificationPreferencesModal />
+
       {/* Floating Live Chat Widget (9h - 17h Lun-Ven) */}
       <LiveChatWidget />
     </div>
@@ -383,9 +456,13 @@ export default function App() {
   return (
     <AuthProvider>
       <FavoritesProvider>
-        <ChatProvider>
-          <AppContent />
-        </ChatProvider>
+        <NotificationProvider>
+          <RealtimeProvider>
+            <ChatProvider>
+              <AppContent />
+            </ChatProvider>
+          </RealtimeProvider>
+        </NotificationProvider>
       </FavoritesProvider>
     </AuthProvider>
   );

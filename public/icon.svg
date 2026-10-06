@@ -1,0 +1,27 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
+  <rect width="512" height="512" rx="112" fill="#0B132B"/>
+  <rect x="16" y="16" width="480" height="480" rx="96" fill="none" stroke="#D4AF37" stroke-width="8" stroke-opacity="0.4"/>
+  <!-- Gavel Icon in Rich Gold Gradient -->
+  <defs>
+    <linearGradient id="goldGrad" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#F3E5AB"/>
+      <stop offset="45%" stop-color="#D4AF37"/>
+      <stop offset="100%" stop-color="#996515"/>
+    </linearGradient>
+  </defs>
+  <!-- Gavel Head -->
+  <g transform="translate(256,230) rotate(-35) translate(-256,-230)">
+    <rect x="176" y="180" width="160" height="70" rx="14" fill="url(#goldGrad)"/>
+    <rect x="156" y="170" width="24" height="90" rx="8" fill="#F3E5AB"/>
+    <rect x="332" y="170" width="24" height="90" rx="8" fill="#F3E5AB"/>
+    <!-- Gavel Handle -->
+    <rect x="241" y="240" width="30" height="180" rx="12" fill="url(#goldGrad)"/>
+    <circle cx="256" cy="425" r="18" fill="#D4AF37"/>
+  </g>
+  <!-- Sound block / Socle -->
+  <path d="M140 410 L372 410 L392 440 L120 440 Z" fill="url(#goldGrad)" opacity="0.9"/>
+  <rect x="110" y="440" width="292" height="14" rx="7" fill="#F3E5AB"/>
+  <!-- Sparkles -->
+  <path d="M120 140 Q130 140 130 130 Q130 140 140 140 Q130 140 130 150 Q130 140 120 140 Z" fill="#F3E5AB"/>
+  <path d="M380 120 Q395 120 395 105 Q395 120 410 120 Q395 120 395 135 Q395 120 380 120 Z" fill="#F3E5AB"/>
+</svg>

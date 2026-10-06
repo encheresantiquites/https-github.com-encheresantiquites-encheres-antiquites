@@ -87,14 +87,14 @@ export const LotCard: React.FC<LotCardProps> = ({ lot, onSelect }) => {
         {lot.userMaxBidCents && (
           <div className="absolute bottom-2.5 left-2.5">
             {lot.isWinning ? (
-              <span className="inline-flex items-center gap-1 bg-emerald-950/90 backdrop-blur-md text-emerald-300 text-[11px] px-2 py-0.5 rounded-md border border-emerald-500/50 font-medium shadow-lg">
+              <span className="inline-flex items-center gap-1 bg-emerald-950/90 backdrop-blur-md text-emerald-200 text-[11px] px-2 py-0.5 rounded-md border border-emerald-400 font-semibold shadow-lg">
                 <CheckCircle2 className="w-3 h-3 text-emerald-400" />
-                Vous menez ({formatEuro(lot.userMaxBidCents)})
+                Vous êtes à présent le meilleur enchérisseur
               </span>
             ) : (
-              <span className="inline-flex items-center gap-1 bg-amber-950/90 backdrop-blur-md text-amber-300 text-[11px] px-2 py-0.5 rounded-md border border-amber-500/50 font-medium shadow-lg">
+              <span className="inline-flex items-center gap-1 bg-amber-950/90 backdrop-blur-md text-amber-200 text-[11px] px-2 py-0.5 rounded-md border border-amber-400 font-semibold shadow-lg">
                 <AlertCircle className="w-3 h-3 text-amber-400" />
-                Surenchéri
+                Offre dépassée (surenchéri)
               </span>
             )}
           </div>

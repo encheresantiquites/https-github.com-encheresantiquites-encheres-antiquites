@@ -1,6 +1,7 @@
 import { db } from '../db/index.ts';
 import { lots, bids, bidHistory, users, auditLogs, orders, transactionDocuments, sales } from '../db/schema.ts';
 import { eq, and, desc, sql } from 'drizzle-orm';
+import { realtimeHub } from './realtime.ts';
 
 /**
  * Règle d'horaire officielle de la plateforme :
@@ -46,6 +47,8 @@ export interface PlaceBidResult {
   message: string;
   currentPriceCents?: number;
   isWinning?: boolean;
+  nextMinCents?: number;
+  userBidCents?: number;
   endsAt?: Date;
   extended?: boolean;
 }
@@ -288,13 +291,40 @@ export async function placeProxyBid(
       ipAddress,
     });
 
+    const nextMinCents = newCurrentPriceCents + getMinimumIncrementCents(newCurrentPriceCents);
+
+    // Diffusion instantanée multi-utilisateurs en temps réel (SSE < 5ms)
+    try {
+      realtimeHub.broadcastBidPlaced({
+        lotId,
+        lotReference: lot.reference,
+        lotTitle: lot.title,
+        currentPriceCents: newCurrentPriceCents,
+        bidCount: lot.bidCount + 1,
+        endsAt: updatedEndsAt,
+        wasExtended,
+        winningUserId: newWinningUserId,
+        previousWinnerId: lot.currentWinnerId,
+        newBid: {
+          publicBidderId,
+          amountCents: newCurrentPriceCents,
+          createdAt: now,
+        },
+        nextMinCents,
+      });
+    } catch (broadcastErr) {
+      console.warn('Realtime broadcast warning:', broadcastErr);
+    }
+
     return {
       success: true,
       message: isUserWinning
-        ? `Félicitations, vous êtes à présent le meilleur enchérisseur ! L'enchère retenue est de ${(newCurrentPriceCents / 100).toFixed(2)} € (votre montant maximum de ${(maxBidCents / 100).toFixed(2)} € reste confidentiel).`
-        : `Votre offre de ${(maxBidCents / 100).toFixed(2)} € ne dépasse pas l'offre maximale automatique d'un autre enchérisseur. Vous avez été immédiatement surenchéri. L'enchère est désormais portée à ${(newCurrentPriceCents / 100).toFixed(2)} €.`,
+        ? `Félicitations, vous êtes à présent le meilleur enchérisseur ! Votre offre a dépassé l'offre maximum précédente. L'enchère retenue est de ${(newCurrentPriceCents / 100).toFixed(2)} € (votre montant maximum de ${(maxBidCents / 100).toFixed(2)} € reste confidentiel).`
+        : `Votre offre de ${(maxBidCents / 100).toFixed(2)} € ne dépasse pas l'offre maximum d'un autre enchérisseur. Vous avez été immédiatement surenchéri par son enchère automatique. L'enchère est désormais portée à ${(newCurrentPriceCents / 100).toFixed(2)} €.`,
       currentPriceCents: newCurrentPriceCents,
       isWinning: isUserWinning,
+      nextMinCents,
+      userBidCents: maxBidCents,
       endsAt: updatedEndsAt,
       extended: wasExtended,
     };

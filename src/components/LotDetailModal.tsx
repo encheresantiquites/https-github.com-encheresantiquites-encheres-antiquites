@@ -3,6 +3,8 @@ import { Lot, BidHistoryItem } from '../types/index.ts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useFavorites } from '../context/FavoritesContext.tsx';
 import { useChat } from '../context/ChatContext.tsx';
+import { useRealtime } from '../context/RealtimeContext.tsx';
+import { useNotifications } from '../context/NotificationContext.tsx';
 import { LiveCountdown } from './LiveCountdown.tsx';
 import {
   X,
@@ -21,6 +23,7 @@ import {
   Heart,
   MessageSquare,
   HelpCircle,
+  Bell,
 } from 'lucide-react';
 
 interface LotDetailModalProps {
@@ -39,11 +42,15 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
   const { user, token, refreshUser } = useAuth();
   const { isFavorite, toggleFavorite } = useFavorites();
   const { openChat } = useChat();
+  const { getLotViewers, setViewingLot, onLotBidReceived } = useRealtime();
+  const { permission: notifPermission, requestPermission: requestNotifPermission } = useNotifications();
+  const viewersCount = getLotViewers(lotId);
   const isFav = isFavorite(lotId);
   const [lot, setLot] = useState<Lot | null>(null);
   const [history, setHistory] = useState<BidHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+  const [liveBidFlash, setLiveBidFlash] = useState<{ amountCents: number; bidder: string } | null>(null);
 
   // Bidding states
   const [bidAmountInput, setBidAmountInput] = useState<string>('');
@@ -51,7 +58,13 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
   const [acceptTermsChecked, setAcceptTermsChecked] = useState(user?.acceptedTerms || false);
   const [submittingBid, setSubmittingBid] = useState(false);
   const [bidError, setBidError] = useState<string | null>(null);
-  const [bidSuccessMessage, setBidSuccessMessage] = useState<string | null>(null);
+  const [bidFeedback, setBidFeedback] = useState<{
+    type: 'WINNING' | 'OUTBID';
+    message: string;
+    bidAmountCents: number;
+    currentPriceCents?: number;
+    nextMinCents?: number;
+  } | null>(null);
   const [showIncrementsTable, setShowIncrementsTable] = useState(false);
 
   // Active Tab
@@ -78,10 +91,56 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
 
   useEffect(() => {
     fetchLotData();
-    // Rafraîchissement périodique léger des enchères
-    const interval = setInterval(fetchLotData, 5000);
-    return () => clearInterval(interval);
-  }, [lotId, token]);
+    setViewingLot(lotId);
+
+    // Écoute instantanée des enchères sur ce lot en temps réel (< 50ms)
+    const unsubscribe = onLotBidReceived?.((event) => {
+      if (event.lotId === lotId) {
+        setLot((prev) => {
+          if (!prev) return prev;
+          const isWinner = user ? event.winningUserId === user.id : false;
+          return {
+            ...prev,
+            currentPriceCents: event.currentPriceCents,
+            bidCount: event.bidCount,
+            endsAt: event.endsAt,
+            isWinning: isWinner,
+          };
+        });
+
+        setHistory((prev) => [
+          {
+            id: event.newBid.id || Date.now(),
+            publicBidderId: event.newBid.publicBidderId,
+            amountCents: event.newBid.amountCents,
+            createdAt: event.newBid.createdAt,
+          },
+          ...prev.filter(
+            (b) =>
+              !(b.amountCents === event.newBid.amountCents && b.publicBidderId === event.newBid.publicBidderId)
+          ),
+        ]);
+
+        setLiveBidFlash({
+          amountCents: event.currentPriceCents,
+          bidder: event.newBid.publicBidderId,
+        });
+
+        setTimeout(() => {
+          setLiveBidFlash(null);
+        }, 4000);
+      }
+    });
+
+    // Backup polling léger toutes les 10s au cas où la connexion mobile décroche
+    const interval = setInterval(fetchLotData, 10000);
+
+    return () => {
+      setViewingLot(null);
+      if (unsubscribe) unsubscribe();
+      clearInterval(interval);
+    };
+  }, [lotId, token, user, setViewingLot, onLotBidReceived]);
 
   const formatEuro = (cents: number) => {
     return new Intl.NumberFormat('fr-FR', {
@@ -109,7 +168,7 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
   const handleOpenConfirm = (e: React.FormEvent) => {
     e.preventDefault();
     setBidError(null);
-    setBidSuccessMessage(null);
+    setBidFeedback(null);
 
     const val = parseFloat(bidAmountInput.replace(',', '.'));
     if (isNaN(val) || val < minRequiredEuros) {
@@ -165,7 +224,13 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
         throw new Error(data.error || 'Erreur lors du placement de l’enchère.');
       }
 
-      setBidSuccessMessage(data.message);
+      setBidFeedback({
+        type: data.isWinning ? 'WINNING' : 'OUTBID',
+        message: data.message,
+        bidAmountCents: maxBidCents,
+        currentPriceCents: data.currentPriceCents,
+        nextMinCents: data.nextMinCents,
+      });
       setConfirmModalOpen(false);
       setBidAmountInput('');
       await fetchLotData();
@@ -206,8 +271,13 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
             <span className="font-mono text-xs font-semibold px-2.5 py-1 rounded bg-[#0B132B] text-[#D4AF37] border border-[#D4AF37]/30">
               {lot.reference}
             </span>
-            <span className="text-xs text-slate-300 font-serif hidden sm:inline">
-              Enchères d'Objets d'Art & Curiosités
+            {/* Live presence indicator */}
+            <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-emerald-950/80 text-emerald-300 border border-emerald-500/40 shadow-sm">
+              <span className="relative flex h-2 w-2">
+                <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-emerald-400 opacity-75"></span>
+                <span className="relative inline-flex rounded-full h-2 w-2 bg-emerald-500"></span>
+              </span>
+              <span>{viewersCount} en direct</span>
             </span>
           </div>
 
@@ -330,21 +400,52 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                 </div>
               )}
 
+              {/* Flash enchère instantanée en direct */}
+              {liveBidFlash && (
+                <div className="mt-4 p-3 rounded-xl bg-gradient-to-r from-amber-950/90 via-amber-900/80 to-[#1C2541] border border-amber-400 text-amber-100 flex items-center justify-between text-xs sm:text-sm shadow-xl animate-in fade-in slide-in-from-top-1">
+                  <div className="flex items-center gap-2">
+                    <span className="text-base animate-pulse">⚡</span>
+                    <span>
+                      Nouvelle enchère en direct de <strong className="text-amber-300">{liveBidFlash.bidder}</strong> :
+                    </span>
+                  </div>
+                  <span className="font-mono font-bold text-amber-200 text-sm bg-black/50 px-2.5 py-0.5 rounded border border-amber-400/50">
+                    {formatEuro(liveBidFlash.amountCents)}
+                  </span>
+                </div>
+              )}
+
               {/* Price Panel */}
-              <div className="mt-4 bg-[#1C2541] rounded-xl p-4 border border-[#D4AF37]/30 flex items-center justify-between">
+              <div className="mt-4 bg-[#1C2541] rounded-xl p-4 border border-[#D4AF37]/30 flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
                   <span className="text-xs uppercase tracking-wider text-slate-400 font-medium">
                     {lot.bidCount === 0 ? 'Mise à prix' : 'Enchère actuelle'}
                   </span>
-                  <div className="text-2xl sm:text-3xl font-bold font-serif text-[#D4AF37]">
-                    {formatEuro(lot.currentPriceCents)}
+                  <div className="flex items-center gap-2.5 flex-wrap mt-0.5">
+                    <div className="text-2xl sm:text-3xl font-bold font-serif text-[#D4AF37]">
+                      {formatEuro(lot.currentPriceCents)}
+                    </div>
+                    {/* Badge à côté de son enchère */}
+                    {lot.userMaxBidCents && (
+                      lot.isWinning ? (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-emerald-950/90 border border-emerald-400 text-emerald-200 shadow-md">
+                          <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Vous êtes à présent le meilleur enchérisseur</span>
+                        </span>
+                      ) : (
+                        <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-bold bg-amber-950/90 border border-amber-400 text-amber-200 shadow-md">
+                          <AlertTriangle className="w-3.5 h-3.5 text-amber-400 shrink-0" />
+                          <span>Votre offre ne dépasse pas l'offre maximum</span>
+                        </span>
+                      )
+                    )}
                   </div>
-                  <span className="text-xs text-slate-400">
+                  <span className="text-xs text-slate-400 mt-0.5 block">
                     {lot.bidCount} {lot.bidCount > 1 ? 'offres enregistrées' : 'offre'}
                   </span>
                 </div>
 
-                <div className="text-right">
+                <div className="text-right sm:text-right">
                   <span className="text-xs uppercase tracking-wider text-slate-400">
                     Prochaine offre min.
                   </span>
@@ -354,7 +455,7 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                   <button
                     type="button"
                     onClick={() => setShowIncrementsTable((v) => !v)}
-                    className="text-[11px] text-[#D4AF37] hover:underline flex items-center justify-end gap-1 mt-0.5 cursor-pointer"
+                    className="text-[11px] text-[#D4AF37] hover:underline flex items-center sm:justify-end gap-1 mt-0.5 cursor-pointer"
                   >
                     <HelpCircle className="w-3 h-3" />
                     <span>Palier +{minIncCents / 100} € (voir barème)</span>
@@ -410,38 +511,88 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               {/* User Bidding Status Message */}
               {lot.userMaxBidCents && (
                 <div
-                  className={`mt-3 p-3 rounded-lg border text-xs flex items-center gap-2 ${
+                  className={`mt-3 p-3.5 rounded-xl border text-xs sm:text-sm flex items-center gap-3 shadow-md ${
                     lot.isWinning
-                      ? 'bg-emerald-950/60 border-emerald-500/40 text-emerald-200'
-                      : 'bg-amber-950/60 border-amber-500/40 text-amber-200'
+                      ? 'bg-emerald-950/70 border-emerald-500/60 text-emerald-200'
+                      : 'bg-gradient-to-r from-amber-950/90 to-red-950/70 border-amber-500/70 text-amber-200'
                   }`}
                 >
                   {lot.isWinning ? (
                     <>
-                      <CheckCircle2 className="w-4 h-4 text-emerald-400 shrink-0" />
+                      <div className="w-8 h-8 rounded-full bg-emerald-900 border border-emerald-400 flex items-center justify-center shrink-0">
+                        <CheckCircle2 className="w-5 h-5 text-emerald-300" />
+                      </div>
                       <div>
-                        Vous êtes <strong>le meilleur enchérisseur</strong> avec une offre maximale de{' '}
-                        <strong>{formatEuro(lot.userMaxBidCents)}</strong> (conservée secrète).
+                        <div className="font-bold text-emerald-300 text-sm">
+                          Vous êtes à présent le meilleur enchérisseur
+                        </div>
+                        <div className="text-slate-300 text-xs mt-0.5">
+                          Votre offre maximale confidentielle de <strong>{formatEuro(lot.userMaxBidCents)}</strong> est active et mène actuellement la vente.
+                        </div>
                       </div>
                     </>
                   ) : (
                     <>
-                      <AlertTriangle className="w-4 h-4 text-amber-400 shrink-0" />
+                      <div className="w-8 h-8 rounded-full bg-amber-900/80 border border-amber-400 flex items-center justify-center shrink-0">
+                        <AlertTriangle className="w-5 h-5 text-amber-300" />
+                      </div>
                       <div>
-                        Vous avez été surenchéri. Votre précédent maximum de{' '}
-                        {formatEuro(lot.userMaxBidCents)} a été dépassé.
+                        <div className="font-bold text-amber-300 text-sm">
+                          Votre offre ne dépasse pas l'offre maximum d'un autre enchérisseur
+                        </div>
+                        <div className="text-slate-300 text-xs mt-0.5">
+                          Un autre enchérisseur a placé une enchère automatique supérieure. Votre offre de {formatEuro(lot.userMaxBidCents)} a été immédiatement couverte et surenchérie. Vous n'êtes pas en tête.
+                        </div>
                       </div>
                     </>
                   )}
                 </div>
               )}
 
-              {/* Bidding Feedback Messages */}
-              {bidSuccessMessage && (
-                <div className="mt-3 p-3 rounded-lg bg-emerald-950 border border-emerald-500/60 text-emerald-200 text-xs flex items-start gap-2">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400 mt-0.5 shrink-0" />
-                  <span>{bidSuccessMessage}</span>
-                </div>
+              {/* Bidding Feedback Messages - Flash response right after submitting */}
+              {bidFeedback && (
+                bidFeedback.type === 'WINNING' ? (
+                  <div className="mt-3 p-4 rounded-xl bg-gradient-to-r from-emerald-950 via-[#1C2541] to-slate-900 border-2 border-emerald-400 text-emerald-100 text-xs sm:text-sm space-y-2 shadow-xl animate-in fade-in">
+                    <div className="flex items-center gap-2 font-bold text-emerald-300 text-sm sm:text-base">
+                      <CheckCircle2 className="w-5 h-5 text-emerald-400 shrink-0" />
+                      <span>Vous êtes à présent le meilleur enchérisseur</span>
+                    </div>
+                    <p className="text-slate-200 leading-relaxed text-xs sm:text-sm">
+                      {bidFeedback.message}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+                      <span className="bg-emerald-900/60 px-2.5 py-1 rounded border border-emerald-400/50 text-emerald-200">
+                        🔒 Plafond secret : <strong>{formatEuro(bidFeedback.bidAmountCents)}</strong> (conservé strictement confidentiel)
+                      </span>
+                    </div>
+                  </div>
+                ) : (
+                  <div className="mt-3 p-4 rounded-xl bg-gradient-to-r from-amber-950 via-red-950/90 to-slate-900 border-2 border-amber-500/90 text-amber-100 text-xs sm:text-sm space-y-2.5 shadow-xl animate-in fade-in">
+                    <div className="flex items-center gap-2 font-bold text-amber-300 text-sm sm:text-base">
+                      <AlertTriangle className="w-5 h-5 text-amber-400 shrink-0" />
+                      <span>Votre offre ne dépasse pas l'offre maximum d'un autre enchérisseur</span>
+                    </div>
+                    <p className="text-slate-200 leading-relaxed text-xs sm:text-sm">
+                      {bidFeedback.message}
+                    </p>
+                    <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
+                      <span className="bg-black/60 px-2.5 py-1 rounded border border-amber-500/40 text-amber-200">
+                        Votre montant soumis : <strong>{formatEuro(bidFeedback.bidAmountCents)}</strong> (insuffisant)
+                      </span>
+                      {bidFeedback.currentPriceCents && (
+                        <span className="bg-black/60 px-2.5 py-1 rounded border border-amber-500/40 text-amber-300 font-bold">
+                          Prix actuel du lot : <strong>{formatEuro(bidFeedback.currentPriceCents)}</strong>
+                        </span>
+                      )}
+                    </div>
+                    <div className="bg-[#0B132B]/80 border border-amber-500/40 rounded-lg p-2.5 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-2">
+                      <span>💡 Pour prendre la tête et devenir le meilleur enchérisseur :</span>
+                      <span className="font-mono font-bold text-amber-300 bg-amber-950/80 px-2.5 py-1 rounded border border-amber-400/50">
+                        Prochaine offre requise : {formatEuro(minRequiredCents)}
+                      </span>
+                    </div>
+                  </div>
+                )
               )}
 
               {bidError && (
@@ -518,6 +669,26 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                         <Gavel className="w-4 h-4 text-slate-950" />
                         <span>Placer mon offre maximale</span>
                       </button>
+
+                      {/* Info Notifications Téléphone */}
+                      {notifPermission === 'granted' ? (
+                        <div className="flex items-center justify-center gap-1.5 text-[11px] text-emerald-300 bg-emerald-950/40 px-3 py-1.5 rounded-lg border border-emerald-500/30 text-center">
+                          <Bell className="w-3.5 h-3.5 text-emerald-400 shrink-0" />
+                          <span>Notification activée sur votre téléphone en cas de surenchère sur cet objet.</span>
+                        </div>
+                      ) : (
+                        <button
+                          type="button"
+                          onClick={requestNotifPermission}
+                          className="flex items-center justify-between w-full text-[11px] text-amber-200 bg-amber-950/40 hover:bg-amber-900/50 px-3 py-1.5 rounded-lg border border-amber-500/30 transition-colors cursor-pointer"
+                        >
+                          <span className="flex items-center gap-1.5">
+                            <Bell className="w-3.5 h-3.5 text-amber-400" />
+                            <span>M'avertir par notification si je suis surenchéri</span>
+                          </span>
+                          <span className="font-bold underline text-amber-300">Activer</span>
+                        </button>
+                      )}
                     </form>
                   )}
                 </div>

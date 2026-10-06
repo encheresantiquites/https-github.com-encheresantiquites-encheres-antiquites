@@ -505,7 +505,7 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                                 b.isWinning ? 'text-emerald-400' : 'text-amber-400'
                               }`}
                             >
-                              {b.isWinning ? 'En tête' : 'Surenchéri'}
+                              {b.isWinning ? 'Meilleur enchérisseur' : 'Surenchéri'}
                             </span>
                           </div>
                         </div>
@@ -589,12 +589,12 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                             {bid.isWinning ? (
                               <span className="text-xs font-semibold text-emerald-400 flex items-center gap-1">
                                 <CheckCircle2 className="w-3.5 h-3.5" />
-                                Vous êtes en tête
+                                Vous êtes à présent le meilleur enchérisseur
                               </span>
                             ) : (
                               <span className="text-xs font-semibold text-amber-400 flex items-center gap-1">
                                 <AlertCircle className="w-3.5 h-3.5" />
-                                Surenchéri par un tiers
+                                Votre offre ne dépasse pas l'offre maximum (surenchéri)
                               </span>
                             )}
                           </div>
