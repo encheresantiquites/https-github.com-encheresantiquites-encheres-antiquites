@@ -1,0 +1,8 @@
+{
+  "name": "Enchères-Antiquités",
+  "description": "Plateforme d'enchères d'objets d'art et de collections familiales réservée aux antiquaires et brocanteurs professionnels.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}
