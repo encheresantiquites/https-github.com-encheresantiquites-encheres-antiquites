@@ -1579,6 +1579,45 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                 </div>
               </div>
 
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Photographies de l'objet (1 URL par ligne — Recommandé : 3, 6 ou 9 photos pour 1, 2 ou 3 rangées de 3 cases) :
+                </label>
+                <textarea
+                  rows={4}
+                  value={newLotForm.images.join('\n')}
+                  onChange={(e) => {
+                    const urls = e.target.value
+                      .split('\n')
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                    setNewLotForm({
+                      ...newLotForm,
+                      images: urls.length > 0 ? urls : ['https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80'],
+                    });
+                  }}
+                  placeholder="https://images.unsplash.com/...&#10;https://images.unsplash.com/...&#10;https://images.unsplash.com/..."
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono text-xs text-amber-200"
+                />
+                <p className="text-[11px] text-slate-400 mt-1">
+                  {newLotForm.images.length} photo(s) renseignée(s). Les photos s'afficheront en rangées de 3 cases photos par ligne sur la fiche de l'objet.
+                </p>
+
+                {/* Prévisualisation en grille de 3 cases par ligne */}
+                {newLotForm.images.length > 0 && (
+                  <div className="grid grid-cols-3 gap-2 mt-2 p-2 bg-[#0B132B] rounded-lg border border-slate-800">
+                    {newLotForm.images.map((imgUrl, i) => (
+                      <div key={i} className="aspect-square rounded overflow-hidden border border-slate-700 relative bg-black/60">
+                        <img src={imgUrl} alt="" className="w-full h-full object-cover" />
+                        <span className="absolute top-1 left-1 text-[9px] font-mono px-1 rounded bg-black/80 text-white">
+                          {i + 1}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
               <div className="pt-2 flex justify-end gap-3">
                 <button
                   type="button"

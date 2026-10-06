@@ -399,6 +399,8 @@ function AppContent() {
           onClose={() => setSelectedLot(null)}
           onBidSuccess={() => loadLots(lotFilter)}
           onOpenLogin={() => setLoginOpen(true)}
+          onSelectLot={(newLot) => setSelectedLot(newLot)}
+          allLots={lots}
         />
       )}
 

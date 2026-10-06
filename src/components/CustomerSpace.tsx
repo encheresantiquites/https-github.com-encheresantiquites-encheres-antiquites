@@ -461,7 +461,7 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                       {wonOrdersPendingPayment.length} objet(s) remporté(s) en attente de règlement !
                     </span>
                     <span className="text-slate-300">
-                      Veuillez finaliser votre règlement sous 48h via PayPal afin de valider l'acquisition.
+                      Veuillez finaliser votre règlement sous 24h via PayPal ou Carte Bancaire (passé ce délai, l'objet sera proposé au second enchérisseur).
                     </span>
                   </div>
                   <button

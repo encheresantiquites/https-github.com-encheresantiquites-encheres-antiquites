@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Lot, BidHistoryItem } from '../types/index.ts';
 import { useAuth } from '../context/AuthContext.tsx';
 import { useFavorites } from '../context/FavoritesContext.tsx';
@@ -24,6 +24,10 @@ import {
   MessageSquare,
   HelpCircle,
   Bell,
+  CreditCard,
+  ZoomIn,
+  Sparkles,
+  ArrowUpRight,
 } from 'lucide-react';
 
 interface LotDetailModalProps {
@@ -31,6 +35,8 @@ interface LotDetailModalProps {
   onClose: () => void;
   onBidSuccess?: () => void;
   onOpenLogin?: () => void;
+  onSelectLot?: (lot: Lot) => void;
+  allLots?: Lot[];
 }
 
 export const LotDetailModal: React.FC<LotDetailModalProps> = ({
@@ -38,6 +44,8 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
   onClose,
   onBidSuccess,
   onOpenLogin,
+  onSelectLot,
+  allLots,
 }) => {
   const { user, token, refreshUser } = useAuth();
   const { isFavorite, toggleFavorite } = useFavorites();
@@ -50,6 +58,9 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
   const [history, setHistory] = useState<BidHistoryItem[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
+  const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
+  const [otherLots, setOtherLots] = useState<Lot[]>(allLots || []);
+  const modalScrollRef = useRef<HTMLDivElement>(null);
   const [liveBidFlash, setLiveBidFlash] = useState<{ amountCents: number; bidder: string } | null>(null);
 
   // Bidding states
@@ -90,10 +101,31 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
   };
 
   useEffect(() => {
+    setSelectedImageIndex(0);
+    setLightboxIndex(null);
+    setBidFeedback(null);
+    setBidError(null);
+    setBidAmountInput('');
+    modalScrollRef.current?.scrollTo({ top: 0, behavior: 'smooth' });
+
     fetchLotData();
     setViewingLot(lotId);
 
-    // Écoute instantanée des enchères sur ce lot en temps réel (< 50ms)
+    // Charger la liste des autres lots en cours pour les miniatures
+    const fetchActiveLots = async () => {
+      try {
+        const res = await fetch('/api/lots?filter=current');
+        if (res.ok) {
+          const data = await res.json();
+          setOtherLots(data.lots || []);
+        }
+      } catch (e) {
+        console.warn('Erreur chargement autres lots:', e);
+      }
+    };
+    fetchActiveLots();
+
+    // Écoute instantanée des enchères sur ce lot et sur les autres pièces en temps réel (< 50ms)
     const unsubscribe = onLotBidReceived?.((event) => {
       if (event.lotId === lotId) {
         setLot((prev) => {
@@ -130,6 +162,20 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
           setLiveBidFlash(null);
         }, 4000);
       }
+
+      // Mise à jour instantanée des miniatures des autres objets
+      setOtherLots((prev) =>
+        prev.map((item) =>
+          item.id === event.lotId
+            ? {
+                ...item,
+                currentPriceCents: event.currentPriceCents,
+                bidCount: event.bidCount,
+                endsAt: event.endsAt,
+              }
+            : item
+        )
+      );
     });
 
     // Backup polling léger toutes les 10s au cas où la connexion mobile décroche
@@ -141,6 +187,30 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
       clearInterval(interval);
     };
   }, [lotId, token, user, setViewingLot, onLotBidReceived]);
+
+  // Synchronisation si allLots est transmis via props
+  useEffect(() => {
+    if (allLots && allLots.length > 0) {
+      setOtherLots(allLots);
+    }
+  }, [allLots]);
+
+  // Navigation clavier pour la visionneuse HD (Échap, Flèche Gauche, Flèche Droite)
+  useEffect(() => {
+    if (lightboxIndex === null || !lot) return;
+    const imagesList = lot.images && lot.images.length > 0 ? lot.images : [];
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        setLightboxIndex(null);
+      } else if (e.key === 'ArrowLeft' && imagesList.length > 1) {
+        setLightboxIndex((prev) => (prev !== null && prev > 0 ? prev - 1 : imagesList.length - 1));
+      } else if (e.key === 'ArrowRight' && imagesList.length > 1) {
+        setLightboxIndex((prev) => (prev !== null && prev < imagesList.length - 1 ? prev + 1 : 0));
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [lightboxIndex, lot]);
 
   const formatEuro = (cents: number) => {
     return new Intl.NumberFormat('fr-FR', {
@@ -256,6 +326,14 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
 
   const images = lot.images && lot.images.length > 0 ? lot.images : ['https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80'];
 
+  const otherActiveLots = otherLots.filter((l) => l.id !== lotId && l.status === 'ACTIVE');
+
+  const handleSelectOther = (targetLot: Lot) => {
+    if (onSelectLot) {
+      onSelectLot(targetLot);
+    }
+  };
+
   return (
     <div className="fixed inset-0 z-50 overflow-y-auto bg-black/85 backdrop-blur-md flex items-center justify-center p-2 sm:p-4 md:p-6 animate-in fade-in duration-200">
       <div className="relative w-full max-w-5xl bg-[#0B132B] border border-[#D4AF37]/40 rounded-2xl shadow-2xl overflow-hidden text-slate-200 my-4 flex flex-col max-h-[92vh]">
@@ -306,55 +384,73 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
         </div>
 
         {/* Content Scrollable Body */}
-        <div className="overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
-          {/* Left Column: Photo Gallery (5 cols) */}
+        <div ref={modalScrollRef} className="overflow-y-auto p-4 sm:p-6 grid grid-cols-1 lg:grid-cols-12 gap-6 flex-1">
+          {/* Left Column: Photo Gallery (3 cases photos par ligne) & Notices */}
           <div className="lg:col-span-6 space-y-4">
-            <div className="relative aspect-4/3 w-full bg-slate-950 rounded-xl overflow-hidden border border-slate-800 shadow-inner group">
-              <img
-                src={images[selectedImageIndex]}
-                alt={lot.title}
-                className="w-full h-full object-cover object-center"
-              />
-              {images.length > 1 && (
-                <>
-                  <button
-                    onClick={() =>
-                      setSelectedImageIndex((prev) => (prev > 0 ? prev - 1 : images.length - 1))
-                    }
-                    className="absolute left-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
-                  >
-                    <ChevronLeft className="w-5 h-5" />
-                  </button>
-                  <button
-                    onClick={() =>
-                      setSelectedImageIndex((prev) => (prev < images.length - 1 ? prev + 1 : 0))
-                    }
-                    className="absolute right-2 top-1/2 -translate-y-1/2 p-2 rounded-full bg-black/60 text-white hover:bg-black/90 transition-colors"
-                  >
-                    <ChevronRight className="w-5 h-5" />
-                  </button>
-                </>
-              )}
+            {/* Titre & Info de la galerie */}
+            <div className="flex items-center justify-between text-xs">
+              <div className="flex items-center gap-1.5 text-amber-300 font-serif font-semibold">
+                <Sparkles className="w-4 h-4 text-amber-400" />
+                <span>Photographies de l'objet ({images.length})</span>
+              </div>
+              <span className="text-[11px] text-slate-400 font-mono">
+                3 photos / ligne • Zoom HD
+              </span>
             </div>
 
-            {/* Thumbnails */}
-            {images.length > 1 && (
-              <div className="flex gap-2 overflow-x-auto pb-1">
-                {images.map((img, idx) => (
-                  <button
-                    key={idx}
-                    onClick={() => setSelectedImageIndex(idx)}
-                    className={`w-16 h-16 rounded-lg overflow-hidden border-2 shrink-0 transition-all ${
-                      selectedImageIndex === idx
-                        ? 'border-[#D4AF37] scale-105'
-                        : 'border-slate-800 opacity-60 hover:opacity-100'
-                    }`}
-                  >
-                    <img src={img} alt="" className="w-full h-full object-cover" />
-                  </button>
-                ))}
+            {/* Grille photos : 2 ou 3 lignes de 3 cases photos par ligne selon le nombre de photos déposées */}
+            <div className="grid grid-cols-3 gap-2 sm:gap-2.5">
+              {images.map((img, idx) => (
+                <button
+                  key={idx}
+                  type="button"
+                  onClick={() => setLightboxIndex(idx)}
+                  className="group relative aspect-4/3 sm:aspect-square rounded-xl overflow-hidden border border-slate-700/80 hover:border-[#D4AF37] bg-slate-950 focus:outline-none focus:ring-2 focus:ring-[#D4AF37]/50 shadow-md transition-all text-left cursor-pointer"
+                  title={`Cliquer pour agrandir la vue ${idx + 1} en haute définition`}
+                >
+                  <img
+                    src={img}
+                    alt={`${lot.title} - vue ${idx + 1}`}
+                    className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                  />
+                  {/* Badge index */}
+                  <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-xs text-[10px] font-mono text-slate-300 border border-white/10 shadow">
+                    {idx + 1}/{images.length}
+                  </span>
+                  {/* Overlay au survol avec loupe */}
+                  <div className="absolute inset-0 bg-black/45 opacity-0 group-hover:opacity-100 transition-opacity flex flex-col items-center justify-center gap-1 text-white p-1 text-center">
+                    <ZoomIn className="w-5 h-5 text-[#D4AF37]" />
+                    <span className="text-[10px] font-semibold text-amber-100">
+                      Agrandir HD
+                    </span>
+                  </div>
+                </button>
+              ))}
+            </div>
+
+            {/* Notice explicative : Règlement sous 24h par PayPal, carte bancaire & Réattribution */}
+            <div className="bg-[#1C2541]/90 border border-emerald-500/40 rounded-xl p-3.5 text-xs text-slate-200 shadow-sm space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2 text-emerald-300 font-semibold">
+                  <CreditCard className="w-4 h-4 text-emerald-400 shrink-0" />
+                  <span className="font-serif text-sm">Modalités de règlement en cas de victoire</span>
+                </div>
+                <span className="text-[10px] uppercase font-mono px-2 py-0.5 rounded bg-emerald-950 text-emerald-400 border border-emerald-500/30">
+                  PayPal & CB
+                </span>
               </div>
-            )}
+
+              <p className="leading-relaxed text-slate-300 text-[12px]">
+                Règlement sous <strong className="text-amber-300 font-bold">24h</strong> par <strong className="text-white">PayPal</strong> ou <strong className="text-white">Carte bancaire</strong> en cas de victoire.
+              </p>
+
+              <div className="bg-amber-950/40 border border-amber-500/30 rounded-lg p-2.5 text-[11.5px] text-amber-200/90 flex items-start gap-2">
+                <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <p className="leading-snug">
+                  <strong>Délai impératif :</strong> Passé ce délai de 24h, votre offre gagnante sera annulée et la pièce sera automatiquement proposée à l'enchérisseur perdant.
+                </p>
+              </div>
+            </div>
 
             {/* Provenance Banner */}
             <div className="bg-[#1C2541]/70 border border-amber-500/20 rounded-xl p-3.5 text-xs text-slate-300">
@@ -847,14 +943,212 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               )}
             </div>
           </div>
+
+          {/* Section : Autres objets actuellement en enchère (Master Prompt & Demande Utilisateur) */}
+          <div className="lg:col-span-12 border-t border-slate-800 pt-6 mt-2">
+            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 mb-4">
+              <div className="flex items-center gap-2.5">
+                <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-[#D4AF37]/30 flex items-center justify-center text-amber-300">
+                  <Gavel className="w-4 h-4" />
+                </div>
+                <div>
+                  <h3 className="font-serif text-base sm:text-lg font-bold text-amber-100 flex items-center gap-2">
+                    <span>Autres objets actuellement en enchère</span>
+                    <span className="text-xs font-sans font-semibold px-2 py-0.5 rounded-full bg-slate-800 text-amber-300 border border-slate-700">
+                      {otherActiveLots.length}
+                    </span>
+                  </h3>
+                  <p className="text-[11px] text-slate-400">
+                    Découvrez les autres pièces de la collection familiale actuellement en vente
+                  </p>
+                </div>
+              </div>
+              <span className="text-xs text-amber-400/80 font-mono hidden sm:inline">
+                Chrono direct & surenchère instantanée
+              </span>
+            </div>
+
+            {otherActiveLots.length === 0 ? (
+              <div className="bg-[#1C2541]/40 border border-slate-800 rounded-xl p-6 text-center text-xs text-slate-400">
+                Aucun autre objet actuellement en cours d'enchère.
+              </div>
+            ) : (
+              <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
+                {otherActiveLots.map((other) => {
+                  const thumbImg =
+                    other.images && other.images.length > 0
+                      ? other.images[0]
+                      : 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80';
+
+                  return (
+                    <div
+                      key={other.id}
+                      className="bg-[#1C2541] rounded-xl border border-slate-800 hover:border-[#D4AF37]/60 transition-all flex flex-col justify-between overflow-hidden shadow-lg group"
+                    >
+                      {/* Photo miniature & chrono */}
+                      <div
+                        className="relative aspect-4/3 w-full bg-slate-950 overflow-hidden cursor-pointer"
+                        onClick={() => handleSelectOther(other)}
+                      >
+                        <img
+                          src={thumbImg}
+                          alt={other.title}
+                          className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                        />
+                        {/* Chrono restant */}
+                        <div className="absolute top-2 left-2">
+                          <LiveCountdown targetDate={other.endsAt} compact />
+                        </div>
+                        {/* Réf */}
+                        <div className="absolute top-2 right-2">
+                          <span className="font-mono text-[10px] px-1.5 py-0.5 rounded bg-black/75 text-amber-300 border border-white/10">
+                            {other.reference}
+                          </span>
+                        </div>
+                      </div>
+
+                      {/* Contenu : Titre (sans description), Montant de l'enchère, Bouton Placer une enchère */}
+                      <div className="p-3 flex-1 flex flex-col justify-between space-y-2.5">
+                        <div>
+                          <h4
+                            onClick={() => handleSelectOther(other)}
+                            className="font-serif text-sm font-semibold text-slate-100 hover:text-[#D4AF37] transition-colors line-clamp-2 cursor-pointer leading-tight"
+                            title={other.title}
+                          >
+                            {other.title}
+                          </h4>
+                          {other.period && (
+                            <span className="text-[10px] text-amber-400/80 italic font-serif block mt-0.5">
+                              {other.period}
+                            </span>
+                          )}
+                        </div>
+
+                        {/* Montant de l'enchère */}
+                        <div className="pt-1 border-t border-slate-800/80 flex items-baseline justify-between">
+                          <span className="text-[11px] text-slate-400">
+                            {other.bidCount > 0 ? `${other.bidCount} offre${other.bidCount > 1 ? 's' : ''}` : 'Mise à prix'}
+                          </span>
+                          <div className="text-right">
+                            <span className="text-base font-serif font-bold text-[#D4AF37]">
+                              {(other.currentPriceCents / 100).toFixed(0)} €
+                            </span>
+                          </div>
+                        </div>
+
+                        {/* Bouton Placer une enchère */}
+                        <button
+                          type="button"
+                          onClick={() => handleSelectOther(other)}
+                          className="w-full bg-[#D4AF37] hover:bg-[#E5C158] text-[#0B132B] font-serif font-bold text-xs py-2 px-3 rounded-lg flex items-center justify-center gap-1.5 transition-colors shadow-sm cursor-pointer"
+                        >
+                          <Gavel className="w-3.5 h-3.5" />
+                          <span>Placer une enchère</span>
+                        </button>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
         </div>
 
         {/* Footer info */}
         <div className="bg-[#1C2541] px-5 py-2.5 border-t border-slate-800 text-[11px] text-slate-400 flex flex-wrap items-center justify-between shrink-0">
-          <span>Règlement sous 48h par PayPal en cas de victoire</span>
+          <span>Règlement sous 24h par PayPal ou Carte Bancaire en cas de victoire (sinon proposé au second enchérisseur)</span>
           <span className="text-amber-300/80">Document de transaction sans TVA (Vendeur Particulier)</span>
         </div>
       </div>
+
+      {/* Visionneuse HD plein écran (Lightbox) */}
+      {lightboxIndex !== null && lot && (
+        <div
+          className="fixed inset-0 z-70 bg-black/95 backdrop-blur-md flex flex-col items-center justify-between p-3 sm:p-6 animate-in fade-in select-none"
+          onClick={() => setLightboxIndex(null)}
+        >
+          {/* Barre d'en-tête du zoom */}
+          <div
+            className="w-full flex items-center justify-between text-slate-200 z-10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <div className="flex items-center gap-3">
+              <span className="font-mono text-xs px-2.5 py-1 rounded bg-slate-900 border border-slate-700 text-amber-300">
+                Photo {lightboxIndex + 1} / {images.length}
+              </span>
+              <span className="font-serif text-sm font-semibold text-slate-100 truncate max-w-xs sm:max-w-md">
+                {lot.title}
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setLightboxIndex(null)}
+              className="p-2 rounded-full bg-slate-800 hover:bg-slate-700 text-slate-300 hover:text-white transition-colors cursor-pointer"
+              title="Fermer la visionneuse (Échap)"
+            >
+              <X className="w-6 h-6" />
+            </button>
+          </div>
+
+          {/* Image HD au centre */}
+          <div
+            className="relative flex-1 flex items-center justify-center w-full max-w-5xl my-2 overflow-hidden"
+            onClick={(e) => e.stopPropagation()}
+          >
+            <img
+              src={images[lightboxIndex]}
+              alt={`${lot.title} vue détaillée`}
+              className="max-h-[78vh] max-w-full object-contain rounded-lg shadow-2xl border border-slate-800"
+            />
+
+            {images.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLightboxIndex((prev) => (prev! > 0 ? prev! - 1 : images.length - 1))
+                  }
+                  className="absolute left-2 sm:left-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/70 hover:bg-black/90 text-white transition-all cursor-pointer border border-white/20"
+                  title="Photo précédente"
+                >
+                  <ChevronLeft className="w-6 h-6" />
+                </button>
+                <button
+                  type="button"
+                  onClick={() =>
+                    setLightboxIndex((prev) => (prev! < images.length - 1 ? prev! + 1 : 0))
+                  }
+                  className="absolute right-2 sm:right-4 top-1/2 -translate-y-1/2 p-3 rounded-full bg-black/70 hover:bg-black/90 text-white transition-all cursor-pointer border border-white/20"
+                  title="Photo suivante"
+                >
+                  <ChevronRight className="w-6 h-6" />
+                </button>
+              </>
+            )}
+          </div>
+
+          {/* Galerie de vignettes en bas */}
+          <div
+            className="flex gap-2 overflow-x-auto max-w-full py-1 z-10"
+            onClick={(e) => e.stopPropagation()}
+          >
+            {images.map((img, idx) => (
+              <button
+                key={idx}
+                type="button"
+                onClick={() => setLightboxIndex(idx)}
+                className={`w-14 h-14 sm:w-16 sm:h-16 rounded-lg overflow-hidden border-2 shrink-0 transition-all cursor-pointer ${
+                  lightboxIndex === idx
+                    ? 'border-[#D4AF37] scale-105 opacity-100 shadow-md shadow-amber-500/20'
+                    : 'border-slate-800 opacity-60 hover:opacity-100'
+                }`}
+              >
+                <img src={img} alt="" className="w-full h-full object-cover" />
+              </button>
+            ))}
+          </div>
+        </div>
+      )}
 
       {/* Confirmation Modal (Master Prompt Section 19) */}
       {confirmModalOpen && (

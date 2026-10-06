@@ -47,8 +47,8 @@ export const HowItWorksModal: React.FC<HowItWorksModalProps> = ({ onClose, onOpe
     {
       num: 7,
       icon: <CreditCard className="w-5 h-5 text-emerald-400" />,
-      title: 'Règlement PayPal sous 48h & Reçu de transaction',
-      desc: 'L’adjudicataire règle par PayPal sécurisé. Un document légal de confirmation de transaction sans TVA est immédiatement généré.',
+      title: 'Règlement sous 24h par PayPal ou Carte Bancaire & Reçu officiel',
+      desc: 'En cas d’adjudication gagnante, le règlement s’effectue sous 24 heures par PayPal ou carte bancaire sécurisée. Passé ce délai impératif de 24h, votre offre gagnante sera annulée et l’objet sera automatiquement proposé au second meilleur enchérisseur. Un document de transaction sans TVA est ensuite émis.',
     },
     {
       num: 8,
