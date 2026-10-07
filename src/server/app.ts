@@ -14,7 +14,7 @@ import {
   chatMessages,
 } from '../db/schema.ts';
 import { eq, and, desc, asc, sql, ilike, or } from 'drizzle-orm';
-import { requireAuth, requireAdmin, requireApprovedBidder, optionalAuth, AuthRequest } from '../middleware/auth.ts';
+import { requireAuth, requireAdmin, requireApprovedBidder, optionalAuth, type AuthRequest } from '../middleware/auth.ts';
 import { placeProxyBid, closeExpiredLot, getNextStandardLotSchedule } from './auction-engine.ts';
 import { createPayPalOrder, captureAndVerifyPayPalPayment } from './paypal.ts';
 import { getChatScheduleStatus } from '../lib/chat-schedule.ts';
@@ -22,6 +22,40 @@ import { realtimeHub } from './realtime.ts';
 
 export const app = express();
 app.use(express.json());
+
+// Proxy d'images sécurisé avec cache pour garantir la visibilité de toutes les photos en production
+app.get('/api/image-proxy', async (req, res) => {
+  const imageUrl = req.query.url as string;
+  if (!imageUrl || (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://'))) {
+    return res.status(400).send('Invalid url');
+  }
+
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 6000);
+
+    const upstream = await fetch(imageUrl, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'image/avif,image/webp,image/apng,image/svg+xml,image/*,*/*;q=0.8',
+      },
+    });
+    clearTimeout(timeout);
+
+    if (!upstream.ok) {
+      return res.status(upstream.status).send('Upstream image error');
+    }
+
+    const contentType = upstream.headers.get('content-type') || 'image/jpeg';
+    res.setHeader('Content-Type', contentType);
+    res.setHeader('Cache-Control', 'public, max-age=604800, immutable');
+    const buffer = Buffer.from(await upstream.arrayBuffer());
+    res.send(buffer);
+  } catch (err) {
+    res.status(502).send('Image proxy error');
+  }
+});
 
 // Background tick to auto-close expired lots
 setInterval(async () => {

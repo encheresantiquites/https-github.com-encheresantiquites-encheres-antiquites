@@ -64,34 +64,37 @@ export async function withDbRetry<T>(operation: () => Promise<T>, maxRetries = 3
         .join(' ');
       const code = err?.code || err?.cause?.code || err?.parent?.code;
 
+      const isConstraintOrSyntaxError =
+        typeof code === 'string' && (code.startsWith('23') || code.startsWith('42'));
+
       const isConnError =
-        allText.includes('Connection terminated') ||
-        allText.includes('ECONNRESET') ||
-        allText.includes('EPIPE') ||
-        allText.includes('57P01') ||
-        allText.includes('57P02') ||
-        allText.includes('57P03') ||
-        allText.includes('socket') ||
-        allText.includes('terminating connection') ||
-        allText.includes('Connection closed') ||
-        allText.includes('Connection timeout') ||
-        allText.includes('timeout') ||
-        allText.includes('Client has encountered a connection error') ||
-        allText.includes('server closed the connection') ||
-        code === 'ECONNRESET' ||
-        code === '57P01' ||
-        code === '57P02' ||
-        code === '57P03' ||
-        code === '08006' ||
-        code === '08001' ||
-        code === '08004' ||
-        code === '08003' ||
-        // Si Drizzle retourne "Failed query", le premier échec est réessayé immédiatement car souvent lié à un socket recyclé par le pool
-        (attempt === 0 && typeof err?.message === 'string' && err.message.startsWith('Failed query'));
+        !isConstraintOrSyntaxError &&
+        (allText.includes('Connection terminated') ||
+          allText.includes('ECONNRESET') ||
+          allText.includes('EPIPE') ||
+          allText.includes('57P01') ||
+          allText.includes('57P02') ||
+          allText.includes('57P03') ||
+          allText.includes('socket') ||
+          allText.includes('terminating connection') ||
+          allText.includes('Connection closed') ||
+          allText.includes('Connection timeout') ||
+          allText.includes('timeout') ||
+          allText.includes('Client has encountered a connection error') ||
+          allText.includes('server closed the connection') ||
+          code === 'ECONNRESET' ||
+          code === '57P01' ||
+          code === '57P02' ||
+          code === '57P03' ||
+          code === '08006' ||
+          code === '08001' ||
+          code === '08004' ||
+          code === '08003' ||
+          (typeof err?.message === 'string' && err.message.startsWith('Failed query')));
 
       if (isConnError && attempt < maxRetries) {
         console.warn(`[DB Retry] Reconnexion automatique Cloud SQL (tentative ${attempt + 1}/${maxRetries})...`);
-        await new Promise((r) => setTimeout(r, 200 * (attempt + 1)));
+        await new Promise((r) => setTimeout(r, 250 * (attempt + 1)));
         continue;
       }
       throw err;

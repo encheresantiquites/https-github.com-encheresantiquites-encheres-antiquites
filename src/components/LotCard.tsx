@@ -4,6 +4,7 @@ import { LiveCountdown } from './LiveCountdown.tsx';
 import { useFavorites } from '../context/FavoritesContext.tsx';
 import { useChat } from '../context/ChatContext.tsx';
 import { Gavel, CheckCircle2, AlertCircle, Eye, Heart, Calendar, MessageSquare } from 'lucide-react';
+import { getLotPrimaryImage, handleLotImageError } from '../lib/image-utils.ts';
 
 interface LotCardProps {
   lot: Lot;
@@ -15,10 +16,7 @@ export const LotCard: React.FC<LotCardProps> = ({ lot, onSelect }) => {
   const { openChat } = useChat();
   const isFav = isFavorite(lot.id);
 
-  const primaryImage =
-    lot.images && lot.images.length > 0
-      ? lot.images[0]
-      : 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80';
+  const primaryImage = getLotPrimaryImage(lot.images);
 
   const formatEuro = (cents: number) => {
     return new Intl.NumberFormat('fr-FR', {
@@ -45,6 +43,8 @@ export const LotCard: React.FC<LotCardProps> = ({ lot, onSelect }) => {
           alt={lot.title}
           className="w-full h-full object-cover object-center group-hover:scale-105 transition-transform duration-500 ease-out"
           loading="lazy"
+          referrerPolicy="strict-origin-when-cross-origin"
+          onError={(e) => handleLotImageError(e, primaryImage)}
         />
         <div className="absolute inset-0 bg-gradient-to-t from-slate-950/80 via-transparent to-black/30 pointer-events-none"></div>
 

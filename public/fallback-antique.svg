@@ -1,0 +1,64 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 800 600" width="800" height="600">
+  <defs>
+    <radialGradient id="bgGlow" cx="50%" cy="50%" r="70%">
+      <stop offset="0%" stop-color="#1C2541"/>
+      <stop offset="60%" stop-color="#0B132B"/>
+      <stop offset="100%" stop-color="#070B19"/>
+    </radialGradient>
+    <linearGradient id="goldGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#FFF3C4"/>
+      <stop offset="35%" stop-color="#D4AF37"/>
+      <stop offset="70%" stop-color="#AA7C11"/>
+      <stop offset="100%" stop-color="#6B4E0A"/>
+    </linearGradient>
+    <linearGradient id="borderGradient" x1="0%" y1="0%" x2="100%" y2="100%">
+      <stop offset="0%" stop-color="#D4AF37" stop-opacity="0.8"/>
+      <stop offset="50%" stop-color="#D4AF37" stop-opacity="0.2"/>
+      <stop offset="100%" stop-color="#D4AF37" stop-opacity="0.6"/>
+    </linearGradient>
+  </defs>
+
+  <!-- Background -->
+  <rect width="800" height="600" fill="url(#bgGlow)"/>
+
+  <!-- Ornate Frame Border -->
+  <rect x="24" y="24" width="752" height="552" rx="16" fill="none" stroke="url(#borderGradient)" stroke-width="2"/>
+  <rect x="36" y="36" width="728" height="528" rx="12" fill="none" stroke="#D4AF37" stroke-width="1" stroke-opacity="0.25" stroke-dasharray="6,4"/>
+
+  <!-- Corner Flourishes -->
+  <path d="M40 70 L40 40 L70 40" fill="none" stroke="#D4AF37" stroke-width="3" stroke-linecap="round"/>
+  <path d="M760 70 L760 40 L730 40" fill="none" stroke="#D4AF37" stroke-width="3" stroke-linecap="round"/>
+  <path d="M40 530 L40 560 L70 560" fill="none" stroke="#D4AF37" stroke-width="3" stroke-linecap="round"/>
+  <path d="M760 530 L760 560 L730 560" fill="none" stroke="#D4AF37" stroke-width="3" stroke-linecap="round"/>
+
+  <!-- Central Antique Silhouette: Ornate Vase & Classical Urn with Pedestal -->
+  <g transform="translate(400, 260) scale(1.15)">
+    <!-- Pedestal Base -->
+    <path d="M-90 120 L90 120 L80 135 L-80 135 Z" fill="url(#goldGradient)"/>
+    <rect x="-105" y="135" width="210" height="12" rx="3" fill="#D4AF37" opacity="0.9"/>
+    
+    <!-- Urn Body -->
+    <path d="M0 -110 C-30 -110 -55 -95 -60 -70 C-65 -45 -75 -15 -80 30 C-85 70 -60 100 -35 110 L35 110 C60 100 85 70 80 30 C75 -15 65 -45 60 -70 C55 -95 30 -110 0 -110 Z" fill="url(#goldGradient)" opacity="0.95"/>
+    
+    <!-- Urn Neck & Lip -->
+    <ellipse cx="0" cy="-110" rx="38" ry="10" fill="#FFF3C4"/>
+    <path d="M-38 -110 Q0 -125 38 -110 Q0 -95 -38 -110 Z" fill="url(#goldGradient)"/>
+    <ellipse cx="0" cy="-110" rx="30" ry="6" fill="#0B132B"/>
+
+    <!-- Urn Handles -->
+    <path d="M-55 -60 C-95 -50 -105 -10 -85 20 C-80 25 -75 22 -75 16 C-90 -10 -80 -40 -50 -50 Z" fill="url(#goldGradient)"/>
+    <path d="M55 -60 C95 -50 105 -10 85 20 C80 25 75 22 75 16 C90 -10 80 -40 50 -50 Z" fill="url(#goldGradient)"/>
+
+    <!-- Decorative Medallion in center of Urn -->
+    <circle cx="0" cy="10" r="28" fill="#0B132B" stroke="#FFF3C4" stroke-width="2"/>
+    <polygon points="0,-4 3,3 10,0 5,6 10,12 3,9 0,16 -3,9 -10,12 -5,6 -10,0 -3,3" fill="url(#goldGradient)"/>
+  </g>
+
+  <!-- Typography -->
+  <text x="400" y="470" text-anchor="middle" font-family="serif" font-size="22" font-weight="bold" fill="#D4AF37" letter-spacing="3">
+    ENCHÈRES &amp; ANTIQUITÉS
+  </text>
+  <text x="400" y="500" text-anchor="middle" font-family="sans-serif" font-size="13" fill="#94A3B8" letter-spacing="1">
+    Objet d'Art &amp; Collection de Maître
+  </text>
+</svg>

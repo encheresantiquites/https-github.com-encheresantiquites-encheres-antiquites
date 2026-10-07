@@ -4,6 +4,7 @@ import { useFavorites } from '../context/FavoritesContext.tsx';
 import { Order, TransactionDoc, User, Lot } from '../types/index.ts';
 import { TransactionDocumentModal } from './TransactionDocumentModal.tsx';
 import { LotDetailModal } from './LotDetailModal.tsx';
+import { getLotPrimaryImage, handleLotImageError } from '../lib/image-utils.ts';
 import {
   Building,
   Gavel,
@@ -576,6 +577,8 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                             src={bid.lotImage}
                             alt=""
                             className="w-16 h-16 rounded-lg object-cover border border-slate-700"
+                            referrerPolicy="strict-origin-when-cross-origin"
+                            onError={(e) => handleLotImageError(e, bid.lotImage)}
                           />
                         )}
                         <div>
@@ -1015,13 +1018,12 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                         >
                           <div className="w-24 h-24 rounded-lg bg-slate-900 overflow-hidden shrink-0 border border-slate-800">
                             <img
-                              src={
-                                lot.images && lot.images[0]
-                                  ? lot.images[0]
-                                  : 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=400&q=80'
-                              }
+                              src={getLotPrimaryImage(lot.images)}
                               alt={lot.title}
                               className="w-full h-full object-cover group-hover:scale-105 transition-transform"
+                              loading="lazy"
+                              referrerPolicy="strict-origin-when-cross-origin"
+                              onError={(e) => handleLotImageError(e, getLotPrimaryImage(lot.images))}
                             />
                           </div>
 

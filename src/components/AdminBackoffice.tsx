@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { useAuth } from '../context/AuthContext.tsx';
 import { Sale, Lot, User, AcquisitionItem } from '../types/index.ts';
+import { getLotPrimaryImage, handleLotImageError } from '../lib/image-utils.ts';
 import {
   KeyRound,
   LayoutDashboard,
@@ -89,7 +90,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
       sun.setHours(22, 0, 0, 0);
       return sun.toISOString();
     })(),
-    images: ['https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80'],
+    images: ['https://images.unsplash.com/photo-1615529328331-f8917597711f?auto=format&fit=crop&w=800&q=80'],
   });
 
   const [acquisitionUpdateForm, setAcquisitionUpdateForm] = useState({
@@ -940,11 +941,13 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                       {msg.lotReference ? (
                         <div className="bg-[#0B132B] border border-[#D4AF37]/50 rounded-xl p-3 mb-4 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 shadow-inner">
                           <div className="flex items-center gap-3 min-w-0">
-                            {matchedLot?.images?.[0] ? (
+                            {matchedLot ? (
                               <img
-                                src={matchedLot.images[0]}
+                                src={getLotPrimaryImage(matchedLot.images)}
                                 alt={msg.lotTitle || msg.lotReference}
                                 className="w-12 h-12 rounded-lg object-cover border border-[#D4AF37]/40 flex-shrink-0"
+                                referrerPolicy="strict-origin-when-cross-origin"
+                                onError={(e) => handleLotImageError(e, getLotPrimaryImage(matchedLot.images))}
                               />
                             ) : (
                               <div className="w-12 h-12 rounded-lg bg-[#1C2541] border border-amber-500/30 flex items-center justify-center flex-shrink-0">
@@ -1593,7 +1596,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                       .filter(Boolean);
                     setNewLotForm({
                       ...newLotForm,
-                      images: urls.length > 0 ? urls : ['https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80'],
+                      images: urls.length > 0 ? urls : ['https://images.unsplash.com/photo-1615529328331-f8917597711f?auto=format&fit=crop&w=800&q=80'],
                     });
                   }}
                   placeholder="https://images.unsplash.com/...&#10;https://images.unsplash.com/...&#10;https://images.unsplash.com/..."
@@ -1820,13 +1823,12 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
               <div>
                 <img
-                  src={
-                    previewLot.images && previewLot.images[0]
-                      ? previewLot.images[0]
-                      : 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80'
-                  }
+                  src={getLotPrimaryImage(previewLot.images)}
                   alt={previewLot.title}
                   className="w-full h-48 object-cover rounded-xl border border-slate-700 shadow"
+                  loading="lazy"
+                  referrerPolicy="strict-origin-when-cross-origin"
+                  onError={(e) => handleLotImageError(e, getLotPrimaryImage(previewLot.images))}
                 />
               </div>
 

@@ -6,6 +6,7 @@ import { useChat } from '../context/ChatContext.tsx';
 import { useRealtime } from '../context/RealtimeContext.tsx';
 import { useNotifications } from '../context/NotificationContext.tsx';
 import { LiveCountdown } from './LiveCountdown.tsx';
+import { normalizeLotImages, getLotPrimaryImage, handleLotImageError, FALLBACK_ANTIQUE_IMAGE } from '../lib/image-utils.ts';
 import {
   X,
   Gavel,
@@ -332,7 +333,7 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
     );
   }
 
-  const images = lot.images && lot.images.length > 0 ? lot.images : ['https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80'];
+  const images = normalizeLotImages(lot.images);
 
   const otherActiveLots = otherLots.filter((l) => l.id !== lotId && l.status === 'ACTIVE');
 
@@ -434,6 +435,9 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                     src={img}
                     alt={`${lot.title} - vue ${idx + 1}`}
                     className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                    loading="lazy"
+                    referrerPolicy="strict-origin-when-cross-origin"
+                    onError={(e) => handleLotImageError(e, img)}
                   />
                   {/* Badge index */}
                   <span className="absolute top-1.5 left-1.5 px-1.5 py-0.5 rounded bg-black/80 backdrop-blur-xs text-[10px] font-mono text-slate-300 border border-white/10 shadow">
@@ -1044,10 +1048,7 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
             ) : (
               <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3 sm:gap-4">
                 {otherActiveLots.map((other) => {
-                  const thumbImg =
-                    other.images && other.images.length > 0
-                      ? other.images[0]
-                      : 'https://images.unsplash.com/photo-1579783902614-a3fb3927b675?auto=format&fit=crop&w=800&q=80';
+                  const thumbImg = getLotPrimaryImage(other.images);
 
                   return (
                     <div
@@ -1063,6 +1064,9 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                           src={thumbImg}
                           alt={other.title}
                           className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
+                          loading="lazy"
+                          referrerPolicy="strict-origin-when-cross-origin"
+                          onError={(e) => handleLotImageError(e, thumbImg)}
                         />
                         {/* Chrono restant */}
                         <div className="absolute top-2 left-2">
@@ -1168,6 +1172,8 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               src={images[lightboxIndex]}
               alt={`${lot.title} vue détaillée`}
               className="max-h-[78vh] max-w-full object-contain rounded-lg shadow-2xl border border-slate-800"
+              referrerPolicy="strict-origin-when-cross-origin"
+              onError={(e) => handleLotImageError(e, images[lightboxIndex])}
             />
 
             {images.length > 1 && (
