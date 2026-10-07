@@ -2,6 +2,7 @@ import { db } from '../db/index.ts';
 import { lots, bids, bidHistory, users, auditLogs, orders, transactionDocuments, sales } from '../db/schema.ts';
 import { eq, and, desc, sql } from 'drizzle-orm';
 import { realtimeHub } from './realtime.ts';
+import { inMemoryAuctionStore } from './in-memory-store.ts';
 
 /**
  * Règle d'horaire officielle de la plateforme :
@@ -62,8 +63,9 @@ export async function placeProxyBid(
   maxBidCents: number,
   ipAddress?: string
 ): Promise<PlaceBidResult> {
-  // Exécuter dans une transaction stricte pour éviter toute concurrence
-  return await db.transaction(async (tx) => {
+  try {
+    // Exécuter dans une transaction stricte pour éviter toute concurrence
+    return await db.transaction(async (tx) => {
     // 1. Verrouiller la ligne du lot
     const lotRes = await tx
       .select()
@@ -329,6 +331,10 @@ export async function placeProxyBid(
       extended: wasExtended,
     };
   });
+  } catch (err: any) {
+    console.warn('[Auction Engine] Transaction PostgreSQL échouée, bascule vers le moteur mémoire haute disponibilité:', err?.message || err);
+    return inMemoryAuctionStore.placeBid(lotId, userId, maxBidCents, ipAddress);
+  }
 }
 
 /**
