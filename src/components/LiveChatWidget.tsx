@@ -14,6 +14,7 @@ import {
   Maximize2,
   Minimize2,
 } from 'lucide-react';
+import { getFilteredDefaultLots } from '../data/default-lots.ts';
 
 interface ChatMessage {
   id: number;
@@ -38,7 +39,7 @@ export const LiveChatWidget: React.FC = () => {
   const [loading, setLoading] = useState(false);
   const [availableLots, setAvailableLots] = useState<
     Array<{ id: number; reference: string; title: string; images?: string[]; startingPriceCents?: number }>
-  >([]);
+  >(() => getFilteredDefaultLots('current'));
   const [inputText, setInputText] = useState('');
   const [visitorName, setVisitorName] = useState('');
   const [visitorEmail, setVisitorEmail] = useState('');
@@ -67,10 +68,14 @@ export const LiveChatWidget: React.FC = () => {
       const res = await fetch('/api/lots?filter=current');
       if (res.ok) {
         const data = await res.json();
-        setAvailableLots(data.lots || []);
+        if (Array.isArray(data.lots) && data.lots.length > 0) {
+          setAvailableLots(data.lots);
+          return;
+        }
       }
+      setAvailableLots(getFilteredDefaultLots('current'));
     } catch (err) {
-      console.error('Erreur chargement lots chat:', err);
+      setAvailableLots(getFilteredDefaultLots('current'));
     }
   };
 

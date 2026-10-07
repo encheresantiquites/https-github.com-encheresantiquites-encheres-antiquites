@@ -17,6 +17,7 @@ import { PWAInstallBanner } from './components/PWAInstallBanner.tsx';
 import { PWAInstallModal } from './components/PWAInstallModal.tsx';
 import { NotificationPreferencesModal } from './components/NotificationPreferencesModal.tsx';
 import { Lot } from './types/index.ts';
+import { getFilteredDefaultLots } from './data/default-lots.ts';
 import {
   Gavel,
   ShieldCheck,
@@ -37,12 +38,12 @@ function AppContent() {
   const { lastBidEvent, isConnected, activeViewersCount } = useRealtime();
   const { checkLotsAlerts, setIsModalOpen: setIsNotificationModalOpen } = useNotifications();
   const [currentTab, setCurrentTab] = useState<'home' | 'customer' | 'admin'>('home');
-  const [lots, setLots] = useState<Lot[]>([]);
+  const [lots, setLots] = useState<Lot[]>(() => getFilteredDefaultLots('current'));
   const [selectedLot, setSelectedLot] = useState<Lot | null>(null);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
   const [registerOpen, setRegisterOpen] = useState(false);
   const [loginOpen, setLoginOpen] = useState(false);
-  const [loadingLots, setLoadingLots] = useState(true);
+  const [loadingLots, setLoadingLots] = useState(false);
   const [pwaModalOpen, setPwaModalOpen] = useState(false);
 
   // Strictly 3 tabs as requested by the user: "enchère en cours", "enchères terminées", "Prochaine enchères"
@@ -50,24 +51,40 @@ function AppContent() {
 
   const loadLots = async (filter: LotFilter) => {
     try {
-      setLoadingLots(true);
       const headers: Record<string, string> = {};
       if (token) {
         headers['Authorization'] = `Bearer ${token}`;
       }
-      const res = await fetch(`/api/lots?filter=${filter}`, { headers });
+
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), 4000);
+
+      const res = await fetch(`/api/lots?filter=${filter}`, {
+        headers,
+        signal: controller.signal,
+      });
+      clearTimeout(timeoutId);
+
       if (res.ok) {
         const data = await res.json();
-        setLots(data.lots || []);
+        if (Array.isArray(data.lots) && data.lots.length > 0) {
+          setLots(data.lots);
+          return;
+        }
       }
+      // Secours immédiat avec le catalogue authentique si le backend distant n'a pas répondu
+      setLots(getFilteredDefaultLots(filter));
     } catch (e) {
-      console.error('Erreur chargement des lots:', e);
+      console.warn('Chargement des lots via catalogue local de secours:', e);
+      setLots(getFilteredDefaultLots(filter));
     } finally {
       setLoadingLots(false);
     }
   };
 
   useEffect(() => {
+    // Affiche immédiatement les objets de l'onglet sélectionné
+    setLots(getFilteredDefaultLots(lotFilter));
     loadLots(lotFilter);
   }, [lotFilter, token]);
 

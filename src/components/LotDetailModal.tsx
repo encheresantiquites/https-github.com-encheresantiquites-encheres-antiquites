@@ -7,6 +7,7 @@ import { useRealtime } from '../context/RealtimeContext.tsx';
 import { useNotifications } from '../context/NotificationContext.tsx';
 import { LiveCountdown } from './LiveCountdown.tsx';
 import { normalizeLotImages, getLotPrimaryImage, handleLotImageError, FALLBACK_ANTIQUE_IMAGE } from '../lib/image-utils.ts';
+import { DEFAULT_LOTS } from '../data/default-lots.ts';
 import {
   X,
   Gavel,
@@ -55,7 +56,8 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
   const { permission: notifPermission, requestPermission: requestNotifPermission } = useNotifications();
   const viewersCount = getLotViewers(lotId);
   const isFav = isFavorite(lotId);
-  const [lot, setLot] = useState<Lot | null>(null);
+  const fallbackLot = allLots?.find((l) => l.id === lotId) || DEFAULT_LOTS.find((l) => l.id === lotId) || null;
+  const [lot, setLot] = useState<Lot | null>(fallbackLot);
   const isClosed = Boolean(
     lot &&
       (lot.status === 'SOLD' ||
@@ -65,10 +67,10 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
         (lot.status === 'ACTIVE' && new Date(lot.endsAt).getTime() <= Date.now()))
   );
   const [history, setHistory] = useState<BidHistoryItem[]>([]);
-  const [loading, setLoading] = useState(true);
+  const [loading, setLoading] = useState(!fallbackLot);
   const [selectedImageIndex, setSelectedImageIndex] = useState(0);
   const [lightboxIndex, setLightboxIndex] = useState<number | null>(null);
-  const [otherLots, setOtherLots] = useState<Lot[]>(allLots || []);
+  const [otherLots, setOtherLots] = useState<Lot[]>(() => (allLots && allLots.length > 0 ? allLots : DEFAULT_LOTS));
   const modalScrollRef = useRef<HTMLDivElement>(null);
   const [liveBidFlash, setLiveBidFlash] = useState<{ amountCents: number; bidder: string } | null>(null);
 

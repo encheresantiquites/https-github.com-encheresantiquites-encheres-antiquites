@@ -5,6 +5,7 @@ import { Order, TransactionDoc, User, Lot } from '../types/index.ts';
 import { TransactionDocumentModal } from './TransactionDocumentModal.tsx';
 import { LotDetailModal } from './LotDetailModal.tsx';
 import { getLotPrimaryImage, handleLotImageError } from '../lib/image-utils.ts';
+import { DEFAULT_LOTS } from '../data/default-lots.ts';
 import {
   Building,
   Gavel,
@@ -51,7 +52,7 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
   const [activeBids, setActiveBids] = useState<ActiveBidItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [documents, setDocuments] = useState<TransactionDoc[]>([]);
-  const [allLots, setAllLots] = useState<Lot[]>([]);
+  const [allLots, setAllLots] = useState<Lot[]>(() => DEFAULT_LOTS);
   const [selectedLotDetailId, setSelectedLotDetailId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
 
