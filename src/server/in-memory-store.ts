@@ -1,6 +1,6 @@
 import { DEFAULT_LOTS } from '../data/default-lots.ts';
-import { Lot, BidHistoryItem } from '../types/index.ts';
-import { getMinimumIncrementCents, PlaceBidResult } from './auction-engine.ts';
+import type { Lot, BidHistoryItem } from '../types/index.ts';
+import { getMinimumIncrementCents, type PlaceBidResult } from './auction-engine.ts';
 import { realtimeHub } from './realtime.ts';
 
 interface StoredBid {
