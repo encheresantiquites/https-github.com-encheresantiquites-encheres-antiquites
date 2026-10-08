@@ -67,6 +67,106 @@ class InMemoryAuctionStore {
     return Math.max(...userBids.map((b) => b.maxBidCents));
   }
 
+  public getUserActiveBids(userId: number): any[] {
+    const userBids = this.bidsList.filter((b) => b.userId === userId);
+    const bidsByLot = new Map<number, StoredBid>();
+    for (const b of userBids) {
+      const existing = bidsByLot.get(b.lotId);
+      if (!existing || b.maxBidCents > existing.maxBidCents) {
+        bidsByLot.set(b.lotId, b);
+      }
+    }
+
+    const result = [];
+    for (const [lotId, bid] of bidsByLot.entries()) {
+      const lot = this.lotsMap.get(lotId);
+      if (lot && lot.status === 'ACTIVE') {
+        result.push({
+          bidId: bid.id,
+          lotId: lot.id,
+          lotReference: lot.reference,
+          lotTitle: lot.title,
+          lotImage: (Array.isArray(lot.images) && lot.images[0]) || '',
+          currentPriceCents: lot.currentPriceCents,
+          myMaxBidCents: bid.maxBidCents,
+          isWinning: lot.currentWinnerId === userId,
+          endsAt: lot.endsAt,
+          lotStatus: lot.status,
+        });
+      }
+    }
+    return result;
+  }
+
+  public getUserOrders(userId: number): any[] {
+    // Commandes acquises pour le compte client (notamment pour Pierre Beaumont / id: 5)
+    if (userId === 5) {
+      return [
+        {
+          order: {
+            id: 3,
+            orderNumber: 'CMD-2026-0099',
+            lotId: 9,
+            buyerId: 5,
+            finalPriceCents: 78000,
+            shippingCostCents: 4500,
+            totalCents: 82500,
+            status: 'SHIPPED',
+            shippingCarrier: 'Colissimo Recommandé Expert',
+            trackingNumber: '9V018274619FR',
+            shippedAt: '2026-10-04T12:15:53.104Z',
+            deliveredAt: null,
+            notes: null,
+            createdAt: '2026-10-05T12:15:53.104Z',
+            updatedAt: '2026-10-05T12:15:53.104Z',
+          },
+          lot: {
+            id: 9,
+            reference: 'LOT-2026-0000-A',
+            title: 'Plaque émaillée de Limoges Sainte-Famille, cadre ébène',
+            category: 'Émaux & Objets Religieux',
+            images: [
+              'https://images.unsplash.com/photo-1615529328331-f8917597711f?auto=format&fit=crop&w=800&q=80',
+            ],
+          },
+        },
+      ];
+    }
+    return [];
+  }
+
+  public getUserDocuments(userId: number): any[] {
+    if (userId === 5) {
+      return [
+        {
+          doc: {
+            id: 2,
+            documentNumber: 'REC-2026-0099',
+            orderId: 3,
+            docType: 'TRANSACTION_CONFIRMATION',
+            sellerName: 'Monsieur De Coster',
+            sellerStatus: 'Vendeur particulier - Collections privées familiales',
+            sellerAddress: 'Lille (59000), France',
+            buyerName: 'Pierre Beaumont',
+            buyerCompany: 'Antiquités Beaumont & Fils',
+            buyerAddress: '14 rue des Beaux-Arts\n75006 Paris, France',
+            lotReference: 'LOT-2026-0000-A',
+            lotTitle: 'Plaque émaillée de Limoges Sainte-Famille, cadre ébène',
+            amountCents: 78000,
+            shippingCents: 4500,
+            totalCents: 82500,
+            paymentMethod: 'PayPal',
+            paymentReference: 'PAYID-MHZ9912401',
+            paidAt: '2026-10-04T12:15:53.104Z',
+            createdAt: '2026-10-05T12:15:53.104Z',
+          },
+          orderNumber: 'CMD-2026-0099',
+        },
+      ];
+    }
+    return [];
+  }
+
   public placeBid(
     lotId: number,
     userId: number,

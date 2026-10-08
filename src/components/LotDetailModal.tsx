@@ -662,10 +662,10 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                 </div>
               )}
 
-              {/* User Bidding Status Message */}
-              {!isClosed && lot.userMaxBidCents && (
+              {/* User Bidding Status Message (affiché uniquement s'il n'y a pas de feedback immédiat pour éviter tout doublon) */}
+              {!isClosed && lot.userMaxBidCents && !bidFeedback && (
                 <div
-                  className={`mt-3 p-3.5 rounded-xl border text-xs sm:text-sm flex items-center gap-3 shadow-md ${
+                  className={`mt-3 p-3.5 rounded-xl border text-xs sm:text-sm flex items-start gap-3 shadow-md ${
                     lot.isWinning
                       ? 'bg-emerald-950/70 border-emerald-500/60 text-emerald-200'
                       : 'bg-gradient-to-r from-amber-950/90 to-red-950/70 border-amber-500/70 text-amber-200'
@@ -673,29 +673,37 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                 >
                   {lot.isWinning ? (
                     <>
-                      <div className="w-8 h-8 rounded-full bg-emerald-900 border border-emerald-400 flex items-center justify-center shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-emerald-900 border border-emerald-400 flex items-center justify-center shrink-0 mt-0.5">
                         <CheckCircle2 className="w-5 h-5 text-emerald-300" />
                       </div>
-                      <div>
+                      <div className="space-y-1">
                         <div className="font-bold text-emerald-300 text-sm">
                           Vous êtes à présent le meilleur enchérisseur
                         </div>
-                        <div className="text-slate-300 text-xs mt-0.5">
+                        <div className="text-slate-200 text-xs leading-relaxed">
                           Votre offre maximale confidentielle de <strong>{formatEuro(lot.userMaxBidCents)}</strong> est active et mène actuellement la vente.
+                        </div>
+                        <div className="text-[11px] text-emerald-400/90 font-medium flex items-center gap-1.5 pt-0.5">
+                          <Lock className="w-3.5 h-3.5 shrink-0 text-emerald-400" />
+                          <span>Visible uniquement par vous. Les autres enchérisseurs ne voient que le prix public.</span>
                         </div>
                       </div>
                     </>
                   ) : (
                     <>
-                      <div className="w-8 h-8 rounded-full bg-amber-900/80 border border-amber-400 flex items-center justify-center shrink-0">
+                      <div className="w-8 h-8 rounded-full bg-amber-900/80 border border-amber-400 flex items-center justify-center shrink-0 mt-0.5">
                         <AlertTriangle className="w-5 h-5 text-amber-300" />
                       </div>
-                      <div>
+                      <div className="space-y-1">
                         <div className="font-bold text-amber-300 text-sm">
                           Votre offre ne dépasse pas l'offre maximum d'un autre enchérisseur
                         </div>
-                        <div className="text-slate-300 text-xs mt-0.5">
-                          Un autre enchérisseur a placé une enchère automatique supérieure. Votre offre de {formatEuro(lot.userMaxBidCents)} a été immédiatement couverte et surenchérie. Vous n'êtes pas en tête.
+                        <div className="text-slate-200 text-xs leading-relaxed">
+                          Un autre enchérisseur a placé une enchère automatique supérieure. Votre offre de {formatEuro(lot.userMaxBidCents)} a été couverte et surenchérie.
+                        </div>
+                        <div className="text-[11px] text-amber-400/90 font-medium flex items-center gap-1.5 pt-0.5">
+                          <Lock className="w-3.5 h-3.5 shrink-0 text-amber-400" />
+                          <span>Information privée, visible uniquement sur votre compte.</span>
                         </div>
                       </div>
                     </>
@@ -717,6 +725,9 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                     <div className="flex flex-wrap items-center gap-2 pt-1 text-xs">
                       <span className="bg-emerald-900/60 px-2.5 py-1 rounded border border-emerald-400/50 text-emerald-200">
                         🔒 Plafond secret : <strong>{formatEuro(bidFeedback.bidAmountCents)}</strong> (conservé strictement confidentiel)
+                      </span>
+                      <span className="text-[11px] text-emerald-400/90 italic">
+                        (Vous seul voyez cette information sur votre écran)
                       </span>
                     </div>
                   </div>

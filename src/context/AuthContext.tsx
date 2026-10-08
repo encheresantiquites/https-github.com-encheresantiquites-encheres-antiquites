@@ -19,11 +19,31 @@ interface AuthContextType {
 const AuthContext = createContext<AuthContextType | undefined>(undefined);
 
 export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children }) => {
-  const [user, setUser] = useState<User | null>(null);
+  const [user, setUser] = useState<User | null>(() => {
+    try {
+      const saved = localStorage.getItem('enchere_auth_user');
+      return saved ? JSON.parse(saved) : null;
+    } catch {
+      return null;
+    }
+  });
   const [firebaseUser, setFirebaseUser] = useState<FirebaseUser | null>(null);
-  const [token, setToken] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [isSimulated, setIsSimulated] = useState(false);
+  const [token, setToken] = useState<string | null>(() => {
+    try {
+      return localStorage.getItem('enchere_auth_token') || null;
+    } catch {
+      return null;
+    }
+  });
+  const [loading, setLoading] = useState(false);
+  const [isSimulated, setIsSimulated] = useState(() => {
+    try {
+      const saved = localStorage.getItem('enchere_auth_token');
+      return Boolean(saved && (saved.startsWith('TOKEN_') || saved.startsWith('SIMULATED_')));
+    } catch {
+      return false;
+    }
+  });
 
   // Sync token to API caller
   const fetchDbUser = async (authToken: string) => {
@@ -36,28 +56,46 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (res.ok) {
         const data = await res.json();
         setUser(data.user);
+        try {
+          localStorage.setItem('enchere_auth_user', JSON.stringify(data.user));
+        } catch {}
       }
     } catch (err) {
       console.error('Erreur chargement profil utilisateur:', err);
     }
   };
 
+  // Au chargement ou rafraîchissement de page, synchroniser le profil si token présent
+  useEffect(() => {
+    const savedToken = localStorage.getItem('enchere_auth_token');
+    if (savedToken) {
+      fetchDbUser(savedToken);
+    }
+  }, []);
+
   useEffect(() => {
     const unsubscribe = onAuthStateChanged(auth, async (fbUser) => {
-      if (isSimulated) return;
+      const savedToken = localStorage.getItem('enchere_auth_token');
+      if (savedToken && (savedToken.startsWith('TOKEN_') || savedToken.startsWith('SIMULATED_'))) {
+        return;
+      }
+
       if (fbUser) {
         setFirebaseUser(fbUser);
         try {
           const idToken = await fbUser.getIdToken();
           setToken(idToken);
+          localStorage.setItem('enchere_auth_token', idToken);
           await fetchDbUser(idToken);
         } catch (e) {
           console.error('Erreur obtention token:', e);
         }
       } else {
-        setFirebaseUser(null);
-        setToken(null);
-        setUser(null);
+        if (!savedToken) {
+          setFirebaseUser(null);
+          setToken(null);
+          setUser(null);
+        }
       }
       setLoading(false);
     });
@@ -72,6 +110,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       const cred = await signInWithPopup(auth, googleAuthProvider);
       const idToken = await cred.user.getIdToken();
       setToken(idToken);
+      localStorage.setItem('enchere_auth_token', idToken);
       setFirebaseUser(cred.user);
       await fetchDbUser(idToken);
     } catch (err: any) {
@@ -100,6 +139,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       setToken(data.token);
       setUser(data.user);
       setIsSimulated(true);
+      try {
+        localStorage.setItem('enchere_auth_token', data.token);
+        localStorage.setItem('enchere_auth_user', JSON.stringify(data.user));
+      } catch {}
       return data.user;
     } catch (err: any) {
       console.error('Erreur login credentials:', err);
@@ -112,13 +155,15 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const logout = async () => {
     try {
       await signOut(auth);
-      setFirebaseUser(null);
-      setToken(null);
-      setUser(null);
-      setIsSimulated(false);
-    } catch (err) {
-      console.error('Erreur déconnexion:', err);
-    }
+    } catch (err) {}
+    setFirebaseUser(null);
+    setToken(null);
+    setUser(null);
+    setIsSimulated(false);
+    try {
+      localStorage.removeItem('enchere_auth_token');
+      localStorage.removeItem('enchere_auth_user');
+    } catch {}
   };
 
   const refreshUser = async () => {
@@ -155,6 +200,10 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
       if (userRes.ok) {
         const data = await userRes.json();
         setUser(data.user);
+        try {
+          localStorage.setItem('enchere_auth_token', fakeToken);
+          localStorage.setItem('enchere_auth_user', JSON.stringify(data.user));
+        } catch {}
       }
     } catch (e) {
       console.error('Erreur simulation:', e);

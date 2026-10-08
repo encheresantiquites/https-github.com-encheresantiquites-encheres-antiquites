@@ -23,6 +23,7 @@ import {
   Eye,
   Heart,
   Calendar,
+  RotateCw,
 } from 'lucide-react';
 
 interface ActiveBidItem {
@@ -144,7 +145,7 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
 
   useEffect(() => {
     loadData();
-  }, [token]);
+  }, [token, activeTab]);
 
   useEffect(() => {
     if (user) {
@@ -317,6 +318,15 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
         </div>
 
         <div className="flex items-center gap-3">
+          <button
+            onClick={() => loadData()}
+            disabled={loading}
+            title="Rafraîchir les enchères et commandes"
+            className="flex items-center gap-1.5 px-3.5 py-2.5 bg-[#0B132B] hover:bg-slate-800 text-xs font-medium text-amber-200 hover:text-white border border-slate-700 hover:border-amber-400/40 rounded-xl transition-all cursor-pointer shadow"
+          >
+            <RotateCw className={`w-3.5 h-3.5 ${loading ? 'animate-spin' : ''}`} />
+            <span className="hidden sm:inline">Actualiser</span>
+          </button>
           <div className="bg-[#0B132B] px-4 py-2 rounded-xl border border-slate-700 text-center">
             <span className="text-xs text-slate-400 block">Enchères en cours</span>
             <span className="text-xl font-bold font-mono text-amber-200">{activeBids.length}</span>
