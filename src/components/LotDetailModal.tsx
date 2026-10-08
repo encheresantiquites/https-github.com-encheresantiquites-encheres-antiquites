@@ -30,7 +30,11 @@ import {
   ZoomIn,
   Sparkles,
   ArrowUpRight,
+  Truck,
+  Scale,
 } from 'lucide-react';
+import { calculateShipping } from '../lib/shipping.ts';
+import { ShippingRatesModal } from './ShippingRatesModal.tsx';
 
 interface LotDetailModalProps {
   lotId: number;
@@ -88,6 +92,7 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
     nextMinCents?: number;
   } | null>(null);
   const [showIncrementsTable, setShowIncrementsTable] = useState(false);
+  const [showShippingModal, setShowShippingModal] = useState(false);
 
   // Active Tab
   const [activeTab, setActiveTab] = useState<'details' | 'condition' | 'history'>('details');
@@ -245,6 +250,11 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
     lot?.bidCount === 0 ? lot.startingPriceCents : currentPriceCents + minIncCents;
 
   const minRequiredEuros = Math.ceil(minRequiredCents / 100);
+
+  const shippingCalc = calculateShipping(lot?.weight, {
+    shippingQuoteRequired: Boolean(lot?.shippingQuoteRequired),
+    customShippingCostCents: lot?.customShippingCostCents,
+  });
 
   const handleOpenConfirm = (e: React.FormEvent) => {
     e.preventDefault();
@@ -617,6 +627,34 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
                 )}
               </div>
 
+              {/* Frais de livraison sécurisée - Grille tarifaire unique (France & Belgique) */}
+              <div className="mt-3 p-3 bg-[#0B132B]/80 rounded-xl border border-slate-700/70 flex flex-wrap items-center justify-between gap-2.5 text-xs">
+                <div className="flex items-center gap-2.5">
+                  <div className="w-8 h-8 rounded-lg bg-amber-500/10 border border-amber-400/30 flex items-center justify-center shrink-0">
+                    <Truck className="w-4 h-4 text-[#D4AF37]" />
+                  </div>
+                  <div>
+                    <div className="flex items-center gap-2">
+                      <span className="text-slate-300 font-medium">Livraison sécurisée :</span>
+                      <strong className="text-amber-200 font-mono text-sm">{shippingCalc.formattedCost}</strong>
+                      <span className="text-[10px] text-slate-400">({shippingCalc.formattedWeight})</span>
+                    </div>
+                    <div className="text-[11px] text-slate-400 flex items-center gap-1.5 mt-0.5">
+                      <span>🇫🇷 France ↔ 🇧🇪 Belgique • Grille unique facturée au poids</span>
+                    </div>
+                  </div>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setShowShippingModal(true)}
+                  className="text-[11px] text-[#D4AF37] hover:underline flex items-center gap-1 cursor-pointer font-medium ml-auto"
+                >
+                  <Scale className="w-3.5 h-3.5" />
+                  <span>Voir la grille tarifaire</span>
+                </button>
+              </div>
+
               {/* Panneau explicatif des paliers d'enchères */}
               {!isClosed && showIncrementsTable && (
                 <div className="mt-3 bg-[#0B132B] border border-[#D4AF37]/50 rounded-xl p-3.5 text-xs text-slate-300 space-y-2 animate-in fade-in">
@@ -969,14 +1007,18 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
               {activeTab === 'details' && (
                 <div className="space-y-3 text-xs leading-relaxed text-slate-300">
                   <p>{lot.description}</p>
-                  <div className="grid grid-cols-2 gap-2 bg-[#1C2541]/40 p-3 rounded-lg border border-slate-800 font-mono text-[11px]">
+                  <div className="grid grid-cols-1 sm:grid-cols-3 gap-2 bg-[#1C2541]/40 p-3 rounded-lg border border-slate-800 font-mono text-[11px]">
                     <div>
                       <span className="text-slate-400 block font-sans">Dimensions :</span>
                       <span className="text-amber-200 font-medium">{lot.dimensions || 'Non spécifié'}</span>
                     </div>
                     <div>
-                      <span className="text-slate-400 block font-sans">Poids :</span>
+                      <span className="text-slate-400 block font-sans">Poids colis :</span>
                       <span className="text-amber-200 font-medium">{lot.weight || 'Non spécifié'}</span>
+                    </div>
+                    <div>
+                      <span className="text-slate-400 block font-sans">Livraison (FR / BE) :</span>
+                      <span className="text-amber-300 font-bold">{shippingCalc.formattedCost}</span>
                     </div>
                   </div>
                   {lot.observations && (
@@ -1250,8 +1292,34 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
             <p className="text-sm text-slate-200 mb-2">
               Vous allez placer une enchère maximum de :
             </p>
-            <div className="text-2xl font-serif font-bold text-[#D4AF37] bg-[#0B132B] p-3 rounded-lg border border-slate-700 text-center mb-4">
+            <div className="text-2xl font-serif font-bold text-[#D4AF37] bg-[#0B132B] p-3 rounded-lg border border-slate-700 text-center mb-3">
               {bidAmountInput} €
+            </div>
+
+            {/* Récapitulatif prévisionnel livraison */}
+            <div className="bg-[#0B132B] p-3 rounded-lg border border-slate-700 text-xs space-y-1.5 mb-3">
+              <div className="flex justify-between text-slate-300">
+                <span>Enchère maximum :</span>
+                <span className="font-mono font-bold text-amber-200">{bidAmountInput} €</span>
+              </div>
+              <div className="flex justify-between text-slate-300">
+                <span className="flex items-center gap-1">
+                  <Truck className="w-3 h-3 text-[#D4AF37]" />
+                  <span>Livraison sécurisée ({shippingCalc.formattedWeight}) :</span>
+                </span>
+                <span className="font-mono text-slate-200">{shippingCalc.formattedCost}</span>
+              </div>
+              <div className="border-t border-slate-800 pt-1.5 flex justify-between text-slate-100 font-semibold">
+                <span>Total estimé si adjugé à votre max :</span>
+                <span className="font-mono text-amber-300">
+                  {shippingCalc.isQuoteRequired
+                    ? `${bidAmountInput} € + devis`
+                    : `${(parseFloat(bidAmountInput || '0') + shippingCalc.costCents / 100).toFixed(2).replace('.', ',')} €`}
+                </span>
+              </div>
+              <div className="text-[10px] text-slate-400 italic pt-0.5">
+                Grille tarifaire unique France & Belgique • Paiement sous 24h en cas de victoire
+              </div>
             </div>
 
             <p className="text-xs text-amber-300/90 bg-amber-950/40 p-3 rounded-lg border border-amber-600/30 mb-4 leading-relaxed">
@@ -1300,6 +1368,11 @@ export const LotDetailModal: React.FC<LotDetailModalProps> = ({
             </div>
           </div>
         </div>
+      )}
+
+      {/* Modal Grille Tarifaire Unique Livraison */}
+      {showShippingModal && (
+        <ShippingRatesModal onClose={() => setShowShippingModal(false)} />
       )}
     </div>
   );

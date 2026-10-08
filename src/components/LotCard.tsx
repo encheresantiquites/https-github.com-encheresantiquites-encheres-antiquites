@@ -3,8 +3,9 @@ import { Lot } from '../types/index.ts';
 import { LiveCountdown } from './LiveCountdown.tsx';
 import { useFavorites } from '../context/FavoritesContext.tsx';
 import { useChat } from '../context/ChatContext.tsx';
-import { Gavel, CheckCircle2, AlertCircle, Eye, Heart, Calendar, MessageSquare } from 'lucide-react';
+import { Gavel, CheckCircle2, AlertCircle, Eye, Heart, Calendar, MessageSquare, Truck } from 'lucide-react';
 import { getLotPrimaryImage, handleLotImageError } from '../lib/image-utils.ts';
+import { calculateShipping } from '../lib/shipping.ts';
 
 interface LotCardProps {
   lot: Lot;
@@ -30,6 +31,11 @@ export const LotCard: React.FC<LotCardProps> = ({ lot, onSelect }) => {
   const isSold = lot.status === 'SOLD';
   const isUnsold = lot.status === 'UNSOLD' || lot.status === 'RESERVE_NOT_MET';
   const isClosed = isSold || lot.status === 'CLOSED' || (!isUpcoming && new Date(lot.endsAt).getTime() <= Date.now());
+
+  const shippingCalc = calculateShipping(lot.weight, {
+    shippingQuoteRequired: Boolean(lot.shippingQuoteRequired),
+    customShippingCostCents: lot.customShippingCostCents,
+  });
 
   return (
     <div
@@ -133,6 +139,10 @@ export const LotCard: React.FC<LotCardProps> = ({ lot, onSelect }) => {
               ) : (
                 `${lot.bidCount} ${lot.bidCount > 1 ? 'enchères' : 'enchère'}`
               )}
+            </div>
+            <div className="text-[10px] text-slate-300 flex items-center gap-1 mt-1 font-medium" title="Livraison calculée au poids • Tarif unique France & Belgique">
+              <Truck className="w-3 h-3 text-[#D4AF37] shrink-0" />
+              <span>Livraison : <strong className="text-amber-200 font-mono">{shippingCalc.formattedCost}</strong></span>
             </div>
           </div>
 

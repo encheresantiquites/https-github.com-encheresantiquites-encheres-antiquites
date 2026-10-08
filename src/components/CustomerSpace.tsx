@@ -24,7 +24,16 @@ import {
   Heart,
   Calendar,
   RotateCw,
+  Scale,
 } from 'lucide-react';
+import { calculateShipping } from '../lib/shipping.ts';
+import { ShippingRatesModal } from './ShippingRatesModal.tsx';
+import { LiveCountdown } from './LiveCountdown.tsx';
+import {
+  formatSaleDateHeader,
+  formatSaleHours,
+  getSaleStatusBadge,
+} from '../lib/sales-schedule.ts';
 
 interface ActiveBidItem {
   bidId: number;
@@ -53,6 +62,7 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
   const [activeBids, setActiveBids] = useState<ActiveBidItem[]>([]);
   const [orders, setOrders] = useState<Order[]>([]);
   const [documents, setDocuments] = useState<TransactionDoc[]>([]);
+  const [salesSchedule, setSalesSchedule] = useState<any>(null);
   const [allLots, setAllLots] = useState<Lot[]>(() => DEFAULT_LOTS);
   const [selectedLotDetailId, setSelectedLotDetailId] = useState<number | null>(null);
   const [loading, setLoading] = useState(true);
@@ -65,6 +75,7 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
 
   // Document modal
   const [selectedDoc, setSelectedDoc] = useState<TransactionDoc | null>(null);
+  const [showShippingModal, setShowShippingModal] = useState(false);
 
   // Profile form state
   const [profileForm, setProfileForm] = useState({
@@ -122,6 +133,16 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
         const data = await docsRes.json();
         const mappedDocs = data.documents.map((d: any) => d.doc);
         setDocuments(mappedDocs);
+      }
+
+      // Calendrier des Ventes Bi-Hebdomadaires (Mardi & Vendredi)
+      try {
+        const schedRes = await fetch('/api/sales/schedule');
+        if (schedRes.ok) {
+          setSalesSchedule(await schedRes.json());
+        }
+      } catch (e) {
+        console.error('Erreur chargement calendrier ventes:', e);
       }
 
       // Lots for Favorites
@@ -410,14 +431,30 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
 
           <button
             onClick={() => setActiveTab('documents')}
-            className={`w-full flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
+            className={`w-full flex items-center justify-between px-4 py-3 rounded-xl text-sm font-semibold transition-all relative group cursor-pointer ${
               activeTab === 'documents'
-                ? 'bg-[#D4AF37] text-slate-950 shadow-lg'
+                ? 'bg-gradient-to-r from-[#D4AF37] to-amber-500 text-slate-950 shadow-lg shadow-amber-500/20'
                 : 'text-slate-300 hover:bg-slate-800/60'
             }`}
           >
-            <FileText className="w-4 h-4" />
-            <span>Documents de vente ({documents.length})</span>
+            <div className="flex items-center gap-3">
+              <CreditCard className={`w-4 h-4 ${activeTab === 'documents' ? 'text-slate-950' : 'text-amber-400'}`} />
+              <span className="font-bold">Enchères à payer</span>
+            </div>
+            {wonOrdersPendingPayment.length > 0 ? (
+              <span className="relative flex items-center gap-1.5 px-2.5 py-0.5 rounded-full text-[11px] font-bold bg-amber-950 text-amber-300 border border-amber-400 shadow-[0_0_12px_rgba(212,175,55,0.5)] animate-pulse">
+                <span className="w-1.5 h-1.5 rounded-full bg-amber-400"></span>
+                <span>{wonOrdersPendingPayment.length} à régler</span>
+              </span>
+            ) : documents.length > 0 ? (
+              <span
+                className={`text-[11px] px-2 py-0.5 rounded-full font-medium ${
+                  activeTab === 'documents' ? 'bg-slate-950/30 text-slate-950 font-bold' : 'bg-slate-800 text-slate-300'
+                }`}
+              >
+                {documents.length} doc{documents.length > 1 ? 's' : ''}
+              </span>
+            ) : null}
           </button>
 
           <button
@@ -461,63 +498,294 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
           {/* TAB 1: DASHBOARD OVERVIEW */}
           {activeTab === 'dashboard' && (
             <div className="space-y-6">
-              <h2 className="text-lg font-serif font-bold text-amber-200">
-                Vue d'ensemble de votre activité
-              </h2>
+              <div className="flex flex-wrap items-center justify-between gap-2">
+                <div>
+                  <span className="text-[10px] font-mono uppercase tracking-widest text-[#D4AF37] font-bold block">
+                    ESPACE PROFESSIONNEL ACCRÉDITÉ
+                  </span>
+                  <h2 className="text-xl font-serif font-bold text-amber-200">
+                    Tableau de Bord des Ventes
+                  </h2>
+                </div>
+                <span className="text-xs text-slate-400 bg-slate-900/80 px-3 py-1 rounded-lg border border-slate-800">
+                  2 ventes privées par semaine : <strong>Mardi</strong> & <strong>Vendredi</strong>
+                </span>
+              </div>
+
+              {/* SECTION 14 & 15 : VENTE EN COURS & PROCHAINE VENTE */}
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* VENTE EN COURS */}
+                <div className="bg-[#0B132B] border-2 border-[#D4AF37]/80 rounded-2xl p-5 shadow-xl relative overflow-hidden">
+                  <div className="flex items-center justify-between mb-3">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      <span className="text-xs uppercase tracking-widest font-black text-[#D4AF37]">
+                        VENTE EN COURS
+                      </span>
+                    </div>
+                    {salesSchedule?.currentSale ? (
+                      <span className="text-[10px] font-bold px-2.5 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/50 uppercase">
+                        VENTE OUVERTE
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                        SESSION CLÔTURÉE
+                      </span>
+                    )}
+                  </div>
+
+                  {salesSchedule?.currentSale ? (
+                    <div className="space-y-3">
+                      <div>
+                        <span className="text-xs font-mono font-bold text-amber-300 block">
+                          {salesSchedule.currentSale.saleDay === 'VENDREDI' ? 'VENTE DU VENDREDI' : 'VENTE DU MARDI'}
+                        </span>
+                        <h3 className="font-serif font-bold text-base text-slate-100">
+                          {salesSchedule.currentSale.title}
+                        </h3>
+                        <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                          <span>Horaires : {formatSaleHours(salesSchedule.currentSale.startsAt, salesSchedule.currentSale.endsAt)}</span>
+                          <span>•</span>
+                          <span className="text-amber-300 font-semibold">{salesSchedule.currentSale.totalLots || 0} lots au catalogue</span>
+                        </div>
+                      </div>
+
+                      {/* COMPTE À REBOURS OFFICIEL (Section 15) */}
+                      <div className="bg-[#1C2541] rounded-xl p-3 border border-[#D4AF37]/30">
+                        <div className="flex items-center justify-between text-xs mb-1.5">
+                          <span className="text-slate-300 font-medium">Clôture des offres dans :</span>
+                          <span className="font-mono text-amber-300 font-bold">Session Live</span>
+                        </div>
+                        <LiveCountdown targetDate={salesSchedule.currentSale.endsAt} />
+                      </div>
+
+                      <button
+                        onClick={() => {
+                          const catalogEl = document.getElementById('catalogue');
+                          if (catalogEl) catalogEl.scrollIntoView({ behavior: 'smooth' });
+                          else if (onBack) onBack();
+                        }}
+                        className="w-full bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 font-bold py-2 rounded-xl text-xs transition-all shadow flex items-center justify-center gap-1.5 cursor-pointer"
+                      >
+                        <Gavel className="w-3.5 h-3.5" />
+                        <span>Consulter le catalogue & Porter des offres</span>
+                      </button>
+                    </div>
+                  ) : (
+                    <div className="py-6 text-center space-y-2">
+                      <Clock className="w-8 h-8 text-slate-600 mx-auto" />
+                      <p className="text-xs text-slate-300 font-medium">
+                        Aucune vente privée n'est en direct à cet instant.
+                      </p>
+                      <p className="text-[11px] text-slate-400">
+                        Consultez la prochaine session programmée ci-contre.
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* PROCHAINE VENTE */}
+                <div className="bg-[#0B132B]/80 border border-slate-800 rounded-2xl p-5 shadow-lg relative flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-3">
+                      <span className="text-xs uppercase tracking-widest font-black text-slate-300">
+                        PROCHAINE VENTE
+                      </span>
+                      {salesSchedule?.nextSale ? (
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${getSaleStatusBadge(salesSchedule.nextSale.status).className}`}>
+                          {getSaleStatusBadge(salesSchedule.nextSale.status).label}
+                        </span>
+                      ) : (
+                        <span className="text-[10px] font-semibold text-slate-400 bg-slate-800 px-2 py-0.5 rounded">
+                          EN PRÉPARATION
+                        </span>
+                      )}
+                    </div>
+
+                    {salesSchedule?.nextSale ? (
+                      <div className="space-y-3">
+                        <div className="border-b border-slate-800 pb-2">
+                          <span className="text-xs font-mono font-bold text-slate-300 block">
+                            {salesSchedule.nextSale.saleDay === 'VENDREDI' ? 'VENTE DU VENDREDI' : 'VENTE DU MARDI'}
+                          </span>
+                          <h3 className="font-serif font-bold text-lg text-slate-200">
+                            {formatSaleDateHeader(salesSchedule.nextSale.startsAt)}
+                          </h3>
+                          <div className="text-xs text-slate-400 mt-1 flex items-center gap-2">
+                            <span className="font-mono text-amber-200">{formatSaleHours(salesSchedule.nextSale.startsAt, salesSchedule.nextSale.endsAt)}</span>
+                            <span>•</span>
+                            <span>{salesSchedule.nextSale.totalLots || 0} objets sélectionnés</span>
+                          </div>
+                        </div>
+
+                        <p className="text-xs text-slate-300 italic line-clamp-2">
+                          {salesSchedule.nextSale.title}
+                        </p>
+                      </div>
+                    ) : (
+                      <div className="py-6 text-center text-xs text-slate-400">
+                        La prochaine vente du Mardi ou Vendredi est en cours de sélection et de préparation.
+                      </div>
+                    )}
+                  </div>
+
+                  <div className="pt-4 border-t border-slate-800/80 mt-4 text-[11px] text-slate-400 flex items-center justify-between">
+                    <span>Calendrier commercial : <strong>Mardi</strong> & <strong>Vendredi</strong></span>
+                    <span className="text-amber-300/80">Accès réservé</span>
+                  </div>
+                </div>
+              </div>
 
               {/* Alert if won items await payment */}
               {wonOrdersPendingPayment.length > 0 && (
-                <div className="bg-amber-950/50 border border-amber-500/60 rounded-xl p-4 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3">
+                <div className="bg-amber-950/60 border-2 border-amber-500 rounded-xl p-4 text-xs text-amber-200 flex flex-wrap items-center justify-between gap-3 shadow-lg shadow-amber-950/30">
                   <div>
-                    <span className="font-bold block text-sm">
-                      {wonOrdersPendingPayment.length} objet(s) remporté(s) en attente de règlement !
+                    <span className="font-bold block text-sm flex items-center gap-2">
+                      <CreditCard className="w-4 h-4 text-amber-400" />
+                      {wonOrdersPendingPayment.length} lot(s) remporté(s) en attente de paiement !
                     </span>
-                    <span className="text-slate-300">
-                      Veuillez finaliser votre règlement sous 24h via PayPal ou Carte Bancaire (passé ce délai, l'objet sera proposé au second enchérisseur).
+                    <span className="text-slate-300 block mt-0.5">
+                      Délai officiel de 24h pour finaliser le règlement. En cas de dépassement, le lot est automatiquement transmis au 2ème meilleur enchérisseur.
                     </span>
                   </div>
                   <button
-                    onClick={() => setActiveTab('won')}
-                    className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 font-bold px-3 py-1.5 rounded-lg text-xs transition-colors"
+                    onClick={() => setActiveTab('documents')}
+                    className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 font-bold px-4 py-2 rounded-lg text-xs transition-colors shadow cursor-pointer"
                   >
-                    Régler maintenant
+                    Régler maintenant ({wonOrdersPendingPayment.length})
                   </button>
                 </div>
               )}
 
+              {/* LES 4 MODULES CLÉS DU PROFESSIONNEL (Section 14) */}
+              <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+                <button
+                  onClick={() => setActiveTab('bids')}
+                  className="bg-[#0B132B] hover:bg-slate-900 border border-slate-800 hover:border-amber-500/50 p-4 rounded-xl text-left transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs uppercase font-semibold text-slate-400 group-hover:text-amber-300">
+                      Mes Offres
+                    </span>
+                    <Gavel className="w-4 h-4 text-[#D4AF37]" />
+                  </div>
+                  <div className="text-2xl font-bold font-mono text-slate-100">
+                    {activeBids.length}
+                  </div>
+                  <span className="text-[10px] text-slate-400 block mt-1">
+                    {activeBids.filter((b) => b.isWinning).length} meneur(s)
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('won')}
+                  className="bg-[#0B132B] hover:bg-slate-900 border border-slate-800 hover:border-amber-500/50 p-4 rounded-xl text-left transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs uppercase font-semibold text-slate-400 group-hover:text-amber-300">
+                      Lots Remportés
+                    </span>
+                    <Trophy className="w-4 h-4 text-emerald-400" />
+                  </div>
+                  <div className="text-2xl font-bold font-mono text-emerald-400">
+                    {orders.length}
+                  </div>
+                  <span className="text-[10px] text-slate-400 block mt-1">
+                    Adjudications gagnées
+                  </span>
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('documents')}
+                  className="bg-[#0B132B] hover:bg-slate-900 border border-slate-800 hover:border-amber-500/50 p-4 rounded-xl text-left transition-all cursor-pointer group relative"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs uppercase font-semibold text-slate-400 group-hover:text-amber-300">
+                      Lots à Payer
+                    </span>
+                    <CreditCard className="w-4 h-4 text-amber-400" />
+                  </div>
+                  <div className="text-2xl font-bold font-mono text-amber-300">
+                    {wonOrdersPendingPayment.length}
+                  </div>
+                  <span className="text-[10px] text-slate-400 block mt-1">
+                    Délai de 24h
+                  </span>
+                  {wonOrdersPendingPayment.length > 0 && (
+                    <span className="absolute top-2 right-2 w-2 h-2 rounded-full bg-rose-500 animate-ping"></span>
+                  )}
+                </button>
+
+                <button
+                  onClick={() => setActiveTab('orders')}
+                  className="bg-[#0B132B] hover:bg-slate-900 border border-slate-800 hover:border-amber-500/50 p-4 rounded-xl text-left transition-all cursor-pointer group"
+                >
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs uppercase font-semibold text-slate-400 group-hover:text-amber-300">
+                      Historique Achats
+                    </span>
+                    <Package className="w-4 h-4 text-blue-400" />
+                  </div>
+                  <div className="text-2xl font-bold font-mono text-blue-300">
+                    {orders.filter((o) => o.status !== 'AWAITING_PAYMENT').length}
+                  </div>
+                  <span className="text-[10px] text-slate-400 block mt-1">
+                    Commandes & Suivi
+                  </span>
+                </button>
+              </div>
+
               {/* Summary Cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
                 <div className="bg-[#0B132B] p-4 rounded-xl border border-slate-800">
-                  <span className="text-xs uppercase font-semibold text-slate-400 block mb-1">
-                    Mes enchères actives
-                  </span>
+                  <div className="flex items-center justify-between mb-2">
+                    <span className="text-xs uppercase font-semibold text-slate-400">
+                      Mes enchères actives ({activeBids.length})
+                    </span>
+                    {activeBids.length > 0 && (
+                      <button
+                        onClick={() => setActiveTab('bids')}
+                        className="text-[11px] text-[#D4AF37] hover:underline font-semibold cursor-pointer"
+                      >
+                        Voir tout ({activeBids.length}) →
+                      </button>
+                    )}
+                  </div>
                   <div className="space-y-2">
                     {activeBids.length === 0 ? (
                       <p className="text-xs text-slate-500 italic py-3">
                         Vous ne participez à aucune enchère active actuellement.
                       </p>
                     ) : (
-                      activeBids.slice(0, 3).map((b) => (
+                      activeBids.slice(0, 4).map((b) => (
                         <div
                           key={b.bidId}
-                          className="flex items-center justify-between text-xs p-2 rounded bg-slate-900/60 border border-slate-800"
+                          onClick={() => setSelectedLotDetailId(b.lotId)}
+                          className="flex items-center justify-between text-xs p-2.5 rounded-lg bg-slate-900/60 hover:bg-slate-800/80 border border-slate-800 hover:border-amber-500/40 transition-colors cursor-pointer"
                         >
-                          <div>
-                            <span className="font-mono text-amber-400">{b.lotReference}</span>
-                            <span className="text-slate-200 block truncate max-w-[200px]">
+                          <div className="truncate mr-3">
+                            <span className="font-mono text-amber-400 font-bold block">{b.lotReference}</span>
+                            <span className="text-slate-200 block truncate max-w-[220px]">
                               {b.lotTitle}
                             </span>
                           </div>
-                          <div className="text-right">
-                            <span className="font-bold text-amber-200 block">
+                          <div className="text-right shrink-0">
+                            <span className="font-bold text-amber-200 block font-mono">
                               {formatEuro(b.currentPriceCents)}
                             </span>
                             <span
-                              className={`text-[10px] font-semibold ${
+                              className={`text-[10px] font-semibold flex items-center justify-end gap-1 ${
                                 b.isWinning ? 'text-emerald-400' : 'text-amber-400'
                               }`}
                             >
-                              {b.isWinning ? 'Meilleur enchérisseur' : 'Surenchéri'}
+                              {b.isWinning ? (
+                                <>
+                                  <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                                  <span>Meneur</span>
+                                </>
+                              ) : (
+                                <span>Surenchéri</span>
+                              )}
                             </span>
                           </div>
                         </div>
@@ -615,14 +883,23 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                         </div>
                       </div>
 
-                      <div className="text-right">
-                        <span className="text-[10px] uppercase text-slate-400 block">Prix actuel</span>
-                        <div className="text-xl font-bold font-serif text-[#D4AF37]">
-                          {formatEuro(bid.currentPriceCents)}
+                      <div className="flex flex-col sm:items-end gap-2 w-full sm:w-auto">
+                        <div className="sm:text-right">
+                          <span className="text-[10px] uppercase text-slate-400 block">Prix actuel</span>
+                          <div className="text-xl font-bold font-serif text-[#D4AF37]">
+                            {formatEuro(bid.currentPriceCents)}
+                          </div>
+                          <span className="text-xs text-slate-400 font-mono block">
+                            Votre plafond secret : {formatEuro(bid.myMaxBidCents)}
+                          </span>
                         </div>
-                        <span className="text-xs text-slate-400 font-mono">
-                          Votre max : {formatEuro(bid.myMaxBidCents)}
-                        </span>
+                        <button
+                          onClick={() => setSelectedLotDetailId(bid.lotId)}
+                          className="flex items-center justify-center gap-1.5 px-3 py-1.5 bg-[#D4AF37]/20 hover:bg-[#D4AF37] text-amber-300 hover:text-slate-950 border border-[#D4AF37]/50 rounded-lg text-xs font-semibold transition-all cursor-pointer"
+                        >
+                          <Eye className="w-3.5 h-3.5" />
+                          <span>Voir la fiche / Surenchérir</span>
+                        </button>
                       </div>
                     </div>
                   ))}
@@ -765,65 +1042,219 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
             </div>
           )}
 
-          {/* TAB 5: TRANSACTION DOCUMENTS (Master Prompt Section 31 & 88) */}
+          {/* TAB 5: ENCHÈRES À PAYER & DOCUMENTS DE VENTE */}
           {activeTab === 'documents' && (
-            <div className="space-y-4">
-              <div className="flex items-center justify-between">
+            <div className="space-y-6">
+              {/* Header */}
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
                 <div>
-                  <h2 className="text-lg font-serif font-bold text-amber-200">
-                    Documents légaux de transaction
+                  <h2 className="text-xl font-serif font-bold text-amber-200 flex items-center gap-2">
+                    <CreditCard className="w-5 h-5 text-[#D4AF37]" />
+                    <span>Enchères à payer & Documents de vente</span>
                   </h2>
-                  <p className="text-xs text-slate-400">
-                    Confirmations de vente et reçus délivrés par le vendeur particulier (sans TVA).
+                  <p className="text-xs text-slate-300 mt-1">
+                    Règlement sous 24h par PayPal ou Carte bancaire • Téléchargement direct des confirmations de transaction (sans TVA).
                   </p>
                 </div>
+
+                <button
+                  onClick={() => setShowShippingModal(true)}
+                  className="flex items-center gap-2 px-3.5 py-2 bg-[#0B132B] hover:bg-slate-800 border border-[#D4AF37]/40 text-xs font-semibold text-amber-300 rounded-xl transition-all shadow cursor-pointer"
+                >
+                  <Truck className="w-4 h-4 text-[#D4AF37]" />
+                  <span>Grille tarifaire unique (FR / BE)</span>
+                </button>
               </div>
 
-              {documents.length === 0 ? (
-                <div className="bg-[#0B132B] p-8 rounded-xl border border-slate-800 text-center">
-                  <FileText className="w-8 h-8 text-slate-600 mx-auto mb-2" />
-                  <p className="text-sm text-slate-400">
-                    Aucun document émis pour le moment. Les reçus sont générés automatiquement après paiement confirmé.
-                  </p>
-                </div>
-              ) : (
+              {/* 1. ENCHÈRES EN ATTENTE DE RÈGLEMENT */}
+              {wonOrdersPendingPayment.length > 0 && (
                 <div className="space-y-3">
-                  {documents.map((doc) => (
-                    <div
-                      key={doc.id}
-                      className="bg-[#0B132B] border border-slate-800 hover:border-amber-500/40 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 transition-colors"
-                    >
-                      <div className="flex items-center gap-3">
-                        <FileText className="w-5 h-5 text-amber-400" />
-                        <div>
-                          <span className="font-mono text-xs font-bold text-amber-300">
-                            {doc.documentNumber}
-                          </span>
-                          <h4 className="text-xs font-semibold text-slate-200">
-                            Confirmation de transaction — {doc.lotTitle}
-                          </h4>
-                          <span className="text-[11px] text-slate-400">
-                            Émis le {new Date(doc.createdAt).toLocaleDateString('fr-FR')} • Vendeur particulier
-                          </span>
-                        </div>
-                      </div>
+                  <div className="flex items-center gap-2 text-amber-300 text-xs font-bold uppercase tracking-wider">
+                    <span className="relative flex h-2.5 w-2.5">
+                      <span className="animate-ping absolute inline-flex h-full w-full rounded-full bg-amber-400 opacity-75"></span>
+                      <span className="relative inline-flex rounded-full h-2.5 w-2.5 bg-amber-500"></span>
+                    </span>
+                    <span>Enchère(s) remportée(s) en attente de règlement ({wonOrdersPendingPayment.length})</span>
+                  </div>
 
-                      <div className="flex items-center gap-4">
-                        <span className="font-mono text-sm font-bold text-slate-100">
-                          {formatEuro(doc.totalCents)}
-                        </span>
-                        <button
-                          onClick={() => setSelectedDoc(doc)}
-                          className="flex items-center gap-1.5 bg-slate-800 hover:bg-[#D4AF37] text-slate-200 hover:text-slate-950 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors"
+                  <div className="space-y-3">
+                    {wonOrdersPendingPayment.map((order) => {
+                      const lotWeight = order.lot?.weight || '';
+                      const ship = calculateShipping(lotWeight, {
+                        shippingQuoteRequired: Boolean((order.lot as any)?.shippingQuoteRequired),
+                        customShippingCostCents: order.shippingCostCents,
+                      });
+
+                      return (
+                        <div
+                          key={order.id}
+                          className="bg-gradient-to-r from-amber-950/40 via-[#1C2541] to-[#0B132B] border-2 border-amber-500/60 rounded-xl p-5 shadow-xl flex flex-wrap items-center justify-between gap-4"
                         >
-                          <Eye className="w-3.5 h-3.5" />
-                          <span>Afficher le document</span>
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                          <div className="flex items-center gap-4">
+                            {order.lot?.images?.[0] ? (
+                              <img
+                                src={order.lot.images[0]}
+                                alt={order.lot.title || ''}
+                                className="w-16 h-16 rounded-xl object-cover border border-amber-400/40 shadow"
+                                referrerPolicy="strict-origin-when-cross-origin"
+                                onError={(e) => handleLotImageError(e, order.lot?.images?.[0])}
+                              />
+                            ) : (
+                              <div className="w-16 h-16 rounded-xl bg-amber-500/10 border border-amber-400/40 flex items-center justify-center text-amber-400">
+                                <Trophy className="w-7 h-7" />
+                              </div>
+                            )}
+
+                            <div className="space-y-1">
+                              <span className="font-mono text-xs font-bold text-amber-300">
+                                {order.orderNumber} • Réf. {order.lot?.reference}
+                              </span>
+                              <h3 className="font-serif font-bold text-slate-100 text-sm sm:text-base">
+                                {order.lot?.title}
+                              </h3>
+                              <div className="flex flex-wrap items-center gap-3 text-xs text-slate-300">
+                                <span>Adjudication : <strong>{formatEuro(order.finalPriceCents)}</strong></span>
+                                <span>•</span>
+                                <span className="flex items-center gap-1 text-amber-300 font-medium">
+                                  <Truck className="w-3.5 h-3.5" />
+                                  <span>Livraison unique : {formatEuro(order.shippingCostCents)}</span>
+                                  {lotWeight && <span className="text-slate-400">({lotWeight})</span>}
+                                </span>
+                              </div>
+                              <p className="text-[11px] text-amber-400/90 italic">
+                                ⏱️ Règlement sous 24h par PayPal ou Carte Bancaire
+                              </p>
+                            </div>
+                          </div>
+
+                          <div className="flex flex-col sm:items-end gap-2 w-full sm:w-auto">
+                            <div className="sm:text-right">
+                              <span className="text-[10px] uppercase text-slate-400 block">Total net à régler</span>
+                              <div className="text-xl sm:text-2xl font-bold font-mono text-amber-200">
+                                {formatEuro(order.totalCents)}
+                              </div>
+                              <span className="text-[10px] text-slate-400">0% de frais de vente (particulier)</span>
+                            </div>
+
+                            <button
+                              onClick={() => {
+                                setSelectedOrderForPayment(order);
+                                setPaymentError(null);
+                                setPaymentSuccess(null);
+                              }}
+                              className="w-full sm:w-auto flex items-center justify-center gap-2 bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 font-bold px-5 py-2.5 rounded-xl text-xs shadow-lg shadow-amber-500/20 transition-all cursor-pointer"
+                            >
+                              <CreditCard className="w-4 h-4" />
+                              <span>RÉGLER MAINTENANT</span>
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 </div>
               )}
+
+              {/* 2. DOCUMENTS DE VENTE & CONFIRMATIONS OFFICIELLES */}
+              <div className="space-y-3">
+                <div className="flex items-center justify-between">
+                  <h3 className="font-serif font-bold text-amber-200 text-sm sm:text-base flex items-center gap-2">
+                    <FileText className="w-4 h-4 text-[#D4AF37]" />
+                    <span>Documents de vente & Reçus légaux certifiés</span>
+                  </h3>
+                  <span className="text-xs text-slate-400">
+                    {documents.length} document{documents.length > 1 ? 's' : ''} disponible{documents.length > 1 ? 's' : ''}
+                  </span>
+                </div>
+
+                {documents.length === 0 && wonOrdersPendingPayment.length === 0 ? (
+                  <div className="bg-[#0B132B] p-8 rounded-xl border border-slate-800 text-center">
+                    <FileText className="w-8 h-8 text-slate-600 mx-auto mb-2" />
+                    <p className="text-sm text-slate-400">
+                      Aucune enchère à payer ni document émis pour le moment.
+                    </p>
+                    <p className="text-xs text-slate-500 mt-1">
+                      Les documents de vente certifiés sont générés automatiquement dès réception du règlement.
+                    </p>
+                  </div>
+                ) : documents.length === 0 ? (
+                  <div className="bg-[#0B132B] p-4 rounded-xl border border-slate-800 text-center text-xs text-slate-400">
+                    Votre document de vente officiel sera émis instantanément après validation de votre règlement ci-dessus.
+                  </div>
+                ) : (
+                  <div className="space-y-3">
+                    {documents.map((doc) => (
+                      <div
+                        key={doc.id}
+                        className="bg-[#0B132B] border border-slate-800 hover:border-amber-500/40 rounded-xl p-4 flex flex-wrap items-center justify-between gap-4 transition-colors"
+                      >
+                        <div className="flex items-center gap-3">
+                          <div className="w-10 h-10 rounded-lg bg-amber-500/10 border border-amber-400/30 flex items-center justify-center shrink-0">
+                            <FileText className="w-5 h-5 text-amber-400" />
+                          </div>
+                          <div>
+                            <div className="flex items-center gap-2">
+                              <span className="font-mono text-xs font-bold text-amber-300">
+                                {doc.documentNumber}
+                              </span>
+                              <span className="text-[10px] px-2 py-0.5 rounded bg-emerald-950 text-emerald-300 border border-emerald-500/30 font-semibold">
+                                Payé & Validé
+                              </span>
+                            </div>
+                            <h4 className="text-xs sm:text-sm font-semibold text-slate-100 mt-0.5">
+                              Confirmation de transaction — {doc.lotTitle}
+                            </h4>
+                            <div className="text-[11px] text-slate-400 mt-0.5 flex flex-wrap items-center gap-2">
+                              <span>Réf. {doc.lotReference}</span>
+                              <span>•</span>
+                              <span>Émis le {new Date(doc.createdAt).toLocaleDateString('fr-FR')}</span>
+                              <span>•</span>
+                              <span>Livraison : {formatEuro(doc.shippingCents)}</span>
+                              <span>•</span>
+                              <span className="italic">Vendeur particulier (sans TVA)</span>
+                            </div>
+                          </div>
+                        </div>
+
+                        <div className="flex items-center gap-4">
+                          <div className="text-right">
+                            <span className="text-[10px] text-slate-400 block uppercase">Total réglé</span>
+                            <span className="font-mono text-sm sm:text-base font-bold text-amber-200">
+                              {formatEuro(doc.totalCents)}
+                            </span>
+                          </div>
+                          <button
+                            onClick={() => setSelectedDoc(doc)}
+                            className="flex items-center gap-1.5 bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 px-3.5 py-2 rounded-xl text-xs font-bold transition-all shadow cursor-pointer"
+                          >
+                            <Eye className="w-3.5 h-3.5" />
+                            <span>Voir le document de vente</span>
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {/* 3. RECAPITULATIF TRANSPARENCE GRILLE TARIFAIRE */}
+              <div className="bg-[#0B132B] p-4 rounded-xl border border-slate-800 text-xs text-slate-300 space-y-2">
+                <div className="flex items-center justify-between border-b border-slate-800 pb-2">
+                  <span className="font-bold text-amber-300 uppercase tracking-wider flex items-center gap-1.5">
+                    <Truck className="w-4 h-4 text-[#D4AF37]" />
+                    <span>Engagement Logistique : Grille tarifaire unique</span>
+                  </span>
+                  <button
+                    onClick={() => setShowShippingModal(true)}
+                    className="text-[#D4AF37] hover:underline font-semibold text-xs cursor-pointer"
+                  >
+                    Détail des 8 tranches →
+                  </button>
+                </div>
+                <p className="text-slate-400 text-[11px] leading-relaxed">
+                  Tous les envois (France ↔ France, France ↔ Belgique, Belgique ↔ France, Belgique ↔ Belgique) sont soumis à une grille tarifaire unique facturée strictement au poids du colis : de <strong>14,90 €</strong> (≤ 500 g) jusqu’à <strong>59,90 €</strong> (≤ 25 kg). Au-delà de 25 kg ou pour les pièces spécifiques, l’expédition fait l’objet d’une cotation sur devis.
+                </p>
+              </div>
             </div>
           )}
 
@@ -1129,9 +1560,12 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                   <span className="text-slate-400">Prix d'adjudication :</span>
                   <span className="font-mono">{formatEuro(selectedOrderForPayment.finalPriceCents)}</span>
                 </div>
-                <div className="flex justify-between">
-                  <span className="text-slate-400">Frais d'emballage & transport :</span>
-                  <span className="font-mono">
+                <div className="flex justify-between items-center">
+                  <span className="text-slate-400 flex items-center gap-1.5">
+                    <Truck className="w-3.5 h-3.5 text-[#D4AF37]" />
+                    <span>Livraison sécurisée (Grille unique FR/BE) :</span>
+                  </span>
+                  <span className="font-mono text-amber-200 font-semibold">
                     {formatEuro(selectedOrderForPayment.shippingCostCents)}
                   </span>
                 </div>
@@ -1204,6 +1638,11 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
             loadData();
           }}
         />
+      )}
+
+      {/* Modal Grille Tarifaire Unique Livraison */}
+      {showShippingModal && (
+        <ShippingRatesModal onClose={() => setShowShippingModal(false)} />
       )}
     </div>
   );

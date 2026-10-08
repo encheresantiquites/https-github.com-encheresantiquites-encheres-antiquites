@@ -157,9 +157,10 @@ class AuctionRealtimeHub {
     };
     nextMinCents: number;
   }): void {
-    // 1. Broadcast public général à tous les clients connectés
+    // 1. Broadcast public général à tous les clients connectés (CONFIDENTIALITÉ STRICTE: pas de winningUserId ni previousWinnerId)
+    const { winningUserId, previousWinnerId, ...publicPayload } = data;
     this.broadcast('auction:bid', {
-      ...data,
+      ...publicPayload,
       endsAt: typeof data.endsAt === 'string' ? data.endsAt : data.endsAt.toISOString(),
       timestamp: new Date().toISOString(),
     });
@@ -196,6 +197,14 @@ class AuctionRealtimeHub {
         client.res.write(raw);
       } catch {
         this.removeClient(id);
+      }
+    }
+  }
+
+  public sendToUser(userId: number, event: string, payload: any): void {
+    for (const client of this.clients.values()) {
+      if (client.userId === userId) {
+        this.sendToClient(client.id, event, payload);
       }
     }
   }

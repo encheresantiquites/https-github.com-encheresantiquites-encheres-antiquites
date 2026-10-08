@@ -18,6 +18,12 @@ import { PWAInstallModal } from './components/PWAInstallModal.tsx';
 import { NotificationPreferencesModal } from './components/NotificationPreferencesModal.tsx';
 import { Lot } from './types/index.ts';
 import { getFilteredDefaultLots } from './data/default-lots.ts';
+import { LiveCountdown } from './components/LiveCountdown.tsx';
+import {
+  formatSaleDateHeader,
+  formatSaleHours,
+  getSaleStatusBadge,
+} from './lib/sales-schedule.ts';
 import {
   Gavel,
   ShieldCheck,
@@ -37,7 +43,34 @@ function AppContent() {
   const { user, token } = useAuth();
   const { lastBidEvent, isConnected, activeViewersCount } = useRealtime();
   const { checkLotsAlerts, setIsModalOpen: setIsNotificationModalOpen } = useNotifications();
-  const [currentTab, setCurrentTab] = useState<'home' | 'customer' | 'admin'>('home');
+  const [salesSchedule, setSalesSchedule] = useState<any>(null);
+  const [currentTab, setCurrentTab] = useState<'home' | 'customer' | 'admin'>(() => {
+    try {
+      const urlParams = new URLSearchParams(window.location.search);
+      const tabParam = urlParams.get('tab');
+      if (tabParam === 'customer' || tabParam === 'admin' || tabParam === 'home') {
+        return tabParam as any;
+      }
+      const saved = localStorage.getItem('enchere_current_tab');
+      if (saved === 'customer' || saved === 'admin') {
+        return saved as any;
+      }
+    } catch {}
+    return 'home';
+  });
+
+  useEffect(() => {
+    try {
+      localStorage.setItem('enchere_current_tab', currentTab);
+      const url = new URL(window.location.href);
+      if (currentTab !== 'home') {
+        url.searchParams.set('tab', currentTab);
+      } else {
+        url.searchParams.delete('tab');
+      }
+      window.history.replaceState({}, '', url.toString());
+    } catch {}
+  }, [currentTab]);
   const [lots, setLots] = useState<Lot[]>(() => getFilteredDefaultLots('current'));
   const [selectedLot, setSelectedLot] = useState<Lot | null>(null);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
@@ -81,6 +114,19 @@ function AppContent() {
       setLoadingLots(false);
     }
   };
+
+  const loadSchedule = async () => {
+    try {
+      const res = await fetch('/api/sales/schedule');
+      if (res.ok) {
+        setSalesSchedule(await res.json());
+      }
+    } catch {}
+  };
+
+  useEffect(() => {
+    loadSchedule();
+  }, [lastBidEvent]);
 
   useEffect(() => {
     // Affiche immédiatement les objets de l'onglet sélectionné
@@ -209,6 +255,97 @@ function AppContent() {
           {/* Catalog Section with the 3 requested tabs */}
           <section id="catalogue" className="pt-6 pb-12 md:pt-8 md:pb-16">
             <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+              {/* BANNIÈRE OFFICIELLE DU CALENDRIER BI-HEBDOMADAIRE (Sections 1, 3, 15) */}
+              <div className="mb-8 grid grid-cols-1 md:grid-cols-2 gap-4">
+                {/* VENTE EN COURS */}
+                <div className="bg-[#1C2541]/90 border-2 border-[#D4AF37]/80 rounded-2xl p-5 shadow-xl relative overflow-hidden">
+                  <div className="flex items-center justify-between mb-2">
+                    <div className="flex items-center gap-2">
+                      <span className="w-2.5 h-2.5 rounded-full bg-emerald-400 animate-pulse"></span>
+                      <span className="text-xs uppercase font-mono font-black text-[#D4AF37] tracking-wider">
+                        {salesSchedule?.currentSale
+                          ? (salesSchedule.currentSale.saleDay === 'VENDREDI' ? 'VENTE DU VENDREDI' : 'VENTE DU MARDI')
+                          : 'VENTE DU MARDI & DU VENDREDI'}
+                      </span>
+                    </div>
+                    {salesSchedule?.currentSale ? (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded-full bg-emerald-950 text-emerald-300 border border-emerald-500/40 uppercase">
+                        VENTE OUVERTE
+                      </span>
+                    ) : (
+                      <span className="text-[10px] font-bold px-2 py-0.5 rounded bg-slate-800 text-slate-400">
+                        OFFRES SUSPENDUES
+                      </span>
+                    )}
+                  </div>
+
+                  {salesSchedule?.currentSale ? (
+                    <div className="space-y-3">
+                      <h3 className="font-serif font-bold text-base text-slate-100 line-clamp-1">
+                        {salesSchedule.currentSale.title}
+                      </h3>
+                      <div className="flex items-center gap-3 text-xs text-slate-300">
+                        <span>Horaires : {formatSaleHours(salesSchedule.currentSale.startsAt, salesSchedule.currentSale.endsAt)}</span>
+                        <span>•</span>
+                        <span className="text-amber-300 font-semibold">{salesSchedule.currentSale.totalLots || 0} lots sélectionnés</span>
+                      </div>
+                      {/* Compte à rebours Section 15 */}
+                      <LiveCountdown targetDate={salesSchedule.currentSale.endsAt} />
+                    </div>
+                  ) : (
+                    <div className="py-2 text-xs text-slate-300 space-y-1">
+                      <p className="font-semibold text-slate-100">
+                        Les ventes privées ont lieu exclusivement chaque Mardi et chaque Vendredi.
+                      </p>
+                      <p className="text-slate-400">
+                        Aucune vente le lundi ni le jeudi (journées réservées à la préparation des lots).
+                      </p>
+                    </div>
+                  )}
+                </div>
+
+                {/* PROCHAINE VENTE PROGRAMMÉE */}
+                <div className="bg-[#0B132B] border border-slate-700/80 rounded-2xl p-5 shadow-lg flex flex-col justify-between">
+                  <div>
+                    <div className="flex items-center justify-between mb-2">
+                      <span className="text-xs uppercase font-mono font-bold text-slate-400 tracking-wider">
+                        PROCHAINE VENTE AU CALENDRIER
+                      </span>
+                      {salesSchedule?.nextSale && (
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${getSaleStatusBadge(salesSchedule.nextSale.status).className}`}>
+                          {getSaleStatusBadge(salesSchedule.nextSale.status).label}
+                        </span>
+                      )}
+                    </div>
+
+                    {salesSchedule?.nextSale ? (
+                      <div className="space-y-1.5">
+                        <span className="text-xs font-mono font-bold text-amber-300 block">
+                          {salesSchedule.nextSale.saleDay === 'VENDREDI' ? 'VENTE DU VENDREDI' : 'VENTE DU MARDI'}
+                        </span>
+                        <h4 className="font-serif font-bold text-base text-slate-200">
+                          {formatSaleDateHeader(salesSchedule.nextSale.startsAt)}
+                        </h4>
+                        <div className="text-xs text-slate-400 flex items-center gap-2">
+                          <span className="font-mono text-amber-200">{formatSaleHours(salesSchedule.nextSale.startsAt, salesSchedule.nextSale.endsAt)}</span>
+                          <span>•</span>
+                          <span>{salesSchedule.nextSale.totalLots || 0} objets en préparation</span>
+                        </div>
+                      </div>
+                    ) : (
+                      <p className="text-xs text-slate-400 py-3">
+                        Prochaine session en cours d'organisation par Monsieur De Coster.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="pt-3 border-t border-slate-800/80 mt-3 text-[11px] text-slate-400 flex items-center justify-between">
+                    <span>Accès réservé aux antiquaires inscrits</span>
+                    <span className="text-amber-400 font-medium">Session courte</span>
+                  </div>
+                </div>
+              </div>
+
               {/* Header & The 3 Distinct Tabs */}
               <div className="flex flex-col md:flex-row md:items-center justify-between gap-6 mb-8 border-b border-slate-800 pb-5">
                 <div>

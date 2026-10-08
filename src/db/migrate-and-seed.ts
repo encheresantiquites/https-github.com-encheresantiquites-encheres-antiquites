@@ -183,6 +183,30 @@ const DDL_STATEMENTS = [
     is_read BOOLEAN NOT NULL DEFAULT FALSE,
     created_at TIMESTAMP DEFAULT NOW()
   );`,
+
+  // Mises à niveau et ajouts de colonnes pour les tables déjà existantes
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS shipping_quote_required BOOLEAN DEFAULT FALSE;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS shipping_note TEXT;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS custom_shipping_cost_cents INTEGER;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS target_acquisition_cost_cents INTEGER DEFAULT 0;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS actual_acquisition_cost_cents INTEGER DEFAULT 0;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS acquisition_status TEXT DEFAULT 'PENDING';`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS acquisition_source TEXT;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS acquisition_date TIMESTAMP;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS acquisition_notes TEXT;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS reserve_price_cents INTEGER DEFAULT 0;`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS password_hash TEXT;`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_terms BOOLEAN DEFAULT FALSE;`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_terms_version TEXT;`,
+  `ALTER TABLE users ADD COLUMN IF NOT EXISTS accepted_terms_at TIMESTAMP;`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_cost_cents INTEGER DEFAULT 0;`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS total_cents INTEGER DEFAULT 0;`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS notes TEXT;`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipped_at TIMESTAMP;`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS delivered_at TIMESTAMP;`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_carrier TEXT;`,
+  `ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_number TEXT;`,
+  `ALTER TABLE transaction_documents ADD COLUMN IF NOT EXISTS shipping_cents INTEGER DEFAULT 0;`,
 ];
 
 /**

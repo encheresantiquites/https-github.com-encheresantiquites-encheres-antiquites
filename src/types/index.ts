@@ -1,6 +1,7 @@
 export type UserRole = 'CUSTOMER' | 'ADMIN' | 'STAFF' | 'SUPER_ADMIN';
 export type UserStatus = 'PENDING' | 'APPROVED' | 'REJECTED' | 'SUSPENDED' | 'BLOCKED';
-export type SaleStatus = 'DRAFT' | 'SCHEDULED' | 'LIVE' | 'CLOSED' | 'CANCELLED';
+export type SaleDay = 'MARDI' | 'VENDREDI';
+export type SaleStatus = 'DRAFT' | 'SCHEDULED' | 'LIVE' | 'ENDED' | 'CLOSED' | 'CANCELLED';
 export type LotStatus = 'DRAFT' | 'SCHEDULED' | 'UPCOMING' | 'ACTIVE' | 'SOLD' | 'CLOSED' | 'PASSED' | 'RESERVE_NOT_MET' | 'UNSOLD' | 'CANCELLED';
 export type OrderStatus =
   | 'AWAITING_PAYMENT'
@@ -45,9 +46,12 @@ export interface Sale {
   reference: string;
   title: string;
   description?: string;
+  saleDay?: SaleDay;
   status: SaleStatus;
   startsAt: string;
   endsAt: string;
+  openTime?: string;
+  closeTime?: string;
   antiSnipeMinutes: number;
   antiSnipeTriggerSeconds: number;
   totalLots?: number;
@@ -74,17 +78,26 @@ export interface Lot {
   currentPriceCents: number;
   bidCount: number;
   currentWinnerId?: number | null;
+  secondWinnerId?: number | null;
+  secondBidAmountCents?: number | null;
+  paymentDueAt?: string | null;
+  offeredToSecondAt?: string | null;
+  paymentStatus?: 'PENDING' | 'AWAITING_PAYMENT' | 'PAID' | 'OVERDUE' | 'OFFERED_SECOND' | string | null;
   status: LotStatus;
   endsAt: string;
   images: string[];
   userMaxBidCents?: number | null;
   isWinning?: boolean;
+  userBidStatus?: 'NONE' | 'REGISTERED' | 'WON' | 'OUTBID';
   targetAcquisitionCostCents?: number | null;
   actualAcquisitionCostCents?: number | null;
   acquisitionStatus?: string | null;
   acquisitionSource?: string | null;
   acquisitionDate?: string | null;
   acquisitionNotes?: string | null;
+  shippingQuoteRequired?: boolean | null;
+  shippingNote?: string | null;
+  customShippingCostCents?: number | null;
   createdAt?: string;
   updatedAt?: string;
 }

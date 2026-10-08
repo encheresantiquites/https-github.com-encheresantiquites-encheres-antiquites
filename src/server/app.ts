@@ -14,14 +14,17 @@ import {
   chatMessages,
 } from '../db/schema.ts';
 import { eq, and, desc, asc, sql, ilike, or } from 'drizzle-orm';
+import { alias } from 'drizzle-orm/pg-core';
 import { requireAuth, requireAdmin, requireApprovedBidder, optionalAuth, type AuthRequest } from '../middleware/auth.ts';
-import { placeProxyBid, closeExpiredLot, getNextStandardLotSchedule } from './auction-engine.ts';
+import { placeProxyBid, closeExpiredLot, getNextStandardLotSchedule, offerLotToSecondBidder, updateSalesStatusesAndClosures } from './auction-engine.ts';
 import { createPayPalOrder, captureAndVerifyPayPalPayment } from './paypal.ts';
 import { getChatScheduleStatus } from '../lib/chat-schedule.ts';
 import { realtimeHub } from './realtime.ts';
 import { DEFAULT_LOTS, getFilteredDefaultLots } from '../data/default-lots.ts';
 import { inMemoryAuctionStore } from './in-memory-store.ts';
 import { autoMigrateAndSeed } from '../db/migrate-and-seed.ts';
+import { DEFAULT_SHIPPING_TIERS, calculateShipping } from '../lib/shipping.ts';
+import { calculateNextSaleDates, formatSaleDateHeader, formatSaleHours, DEFAULT_SCHEDULE_CONFIG } from '../lib/sales-schedule.ts';
 
 export const app = express();
 app.use(express.json());
@@ -67,9 +70,11 @@ app.get('/api/image-proxy', async (req, res) => {
   }
 });
 
-// Background tick to auto-close expired lots
+// Background tick to auto-close expired lots and update sales statuses
 setInterval(async () => {
   try {
+    await updateSalesStatusesAndClosures();
+
     const expiredActiveLots = await withDbRetry(() =>
       db
         .select({ id: lots.id })
@@ -81,7 +86,7 @@ setInterval(async () => {
       await closeExpiredLot(item.id);
     }
   } catch (err) {
-    console.error('Error checking expired lots:', err);
+    console.error('Error checking expired lots and sales:', err);
   }
 }, 10000); // Toutes les 10 secondes
 
@@ -594,27 +599,147 @@ app.get('/api/seller-info', async (req, res) => {
   }
 });
 
+// Grille tarifaire unique de livraison (France & Belgique)
+app.get('/api/shipping-rates', (req, res) => {
+  res.json({
+    title: 'Grille tarifaire unique — Livraison sécurisée France & Belgique',
+    configurations: [
+      '🇫🇷 France → 🇫🇷 France',
+      '🇫🇷 France → 🇧🇪 Belgique',
+      '🇧🇪 Belgique → 🇫🇷 France',
+      '🇧🇪 Belgique → 🇧🇪 Belgique',
+    ],
+    rule: 'Frais calculés strictement au poids du colis. Application immédiate de la tranche supérieure en cas de dépassement. Colis > 25 kg ou hors gabarit : sur devis.',
+    currency: 'EUR',
+    tiers: DEFAULT_SHIPPING_TIERS,
+  });
+});
+
+// Calculatrice de livraison en fonction du poids
+app.get('/api/shipping/calculate', (req, res) => {
+  const weight = (req.query.weight as string) || '';
+  const isOversized = req.query.isOversized === 'true';
+  const calculation = calculateShipping(weight, { isOversized });
+  res.json(calculation);
+});
+
+// Calendrier commercial bi-hebdomadaire : Mardi & Vendredi
+app.get('/api/sales/schedule', async (req, res) => {
+  try {
+    const now = new Date();
+
+    // 1. Vente ouverte en direct (LIVE)
+    const liveSales = await withDbRetry(() =>
+      db
+        .select()
+        .from(sales)
+        .where(eq(sales.status, 'LIVE'))
+        .orderBy(desc(sales.startsAt))
+        .limit(1)
+    );
+
+    // 2. Prochaines ventes programmées (Mardi / Vendredi)
+    const upcomingSales = await withDbRetry(() =>
+      db
+        .select()
+        .from(sales)
+        .where(and(or(eq(sales.status, 'SCHEDULED'), eq(sales.status, 'DRAFT')), sql`${sales.endsAt} > ${now}`))
+        .orderBy(asc(sales.startsAt))
+        .limit(4)
+    );
+
+    // 3. Ventes terminées récentes
+    const recentClosedSales = await withDbRetry(() =>
+      db
+        .select()
+        .from(sales)
+        .where(or(eq(sales.status, 'ENDED'), eq(sales.status, 'CLOSED')))
+        .orderBy(desc(sales.endsAt))
+        .limit(3)
+    );
+
+    // Comptage des lots par vente
+    const allSaleIds = [
+      ...(liveSales[0] ? [liveSales[0].id] : []),
+      ...upcomingSales.map((s) => s.id),
+      ...recentClosedSales.map((s) => s.id),
+    ];
+
+    const countsMap: Record<number, number> = {};
+    if (allSaleIds.length > 0) {
+      const counts = await withDbRetry(() =>
+        db
+          .select({
+            saleId: lots.saleId,
+            count: sql<number>`count(*)`,
+          })
+          .from(lots)
+          .where(sql`${lots.saleId} IN (${sql.join(allSaleIds.map((id) => sql`${id}`), sql`, `)})`)
+          .groupBy(lots.saleId)
+      );
+      for (const c of counts) {
+        if (c.saleId) countsMap[c.saleId] = Number(c.count);
+      }
+    }
+
+    const currentSale = liveSales[0] ? { ...liveSales[0], totalLots: countsMap[liveSales[0].id] || 0 } : null;
+    const nextSale = upcomingSales[0] ? { ...upcomingSales[0], totalLots: countsMap[upcomingSales[0].id] || 0 } : null;
+    const followingSale = upcomingSales[1] ? { ...upcomingSales[1], totalLots: countsMap[upcomingSales[1].id] || 0 } : null;
+
+    res.json({
+      currentSale,
+      nextSale,
+      followingSale,
+      upcomingSales: upcomingSales.map((s) => ({ ...s, totalLots: countsMap[s.id] || 0 })),
+      closedSales: recentClosedSales.map((s) => ({ ...s, totalLots: countsMap[s.id] || 0 })),
+      config: DEFAULT_SCHEDULE_CONFIG,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Vente en cours / catalogue actif
 app.get('/api/sales/current', async (req, res) => {
   try {
-    const currentSales = await db
-      .select()
-      .from(sales)
-      .where(or(eq(sales.status, 'LIVE'), eq(sales.status, 'SCHEDULED')))
-      .orderBy(desc(sales.startsAt))
-      .limit(1);
+    const now = new Date();
+    // Priorité à une vente actuellement LIVE
+    const liveSales = await withDbRetry(() =>
+      db
+        .select()
+        .from(sales)
+        .where(eq(sales.status, 'LIVE'))
+        .orderBy(desc(sales.startsAt))
+        .limit(1)
+    );
 
-    if (currentSales.length === 0) {
-      // Retourner la dernière vente même fermée
-      const lastSales = await db
+    if (liveSales.length > 0) {
+      return res.json({ sale: liveSales[0] });
+    }
+
+    // Sinon, la prochaine vente programmée
+    const scheduledSales = await withDbRetry(() =>
+      db
+        .select()
+        .from(sales)
+        .where(and(eq(sales.status, 'SCHEDULED'), sql`${sales.endsAt} > ${now}`))
+        .orderBy(asc(sales.startsAt))
+        .limit(1)
+    );
+
+    if (scheduledSales.length > 0) {
+      return res.json({ sale: scheduledSales[0] });
+    }
+
+    // Dernier recours : dernière vente enregistrée
+    const lastSales = await withDbRetry(() =>
+      db
         .select()
         .from(sales)
         .orderBy(desc(sales.id))
-        .limit(1);
-      return res.json({ sale: lastSales[0] || null });
-    }
-
-    res.json({ sale: currentSales[0] });
+        .limit(1)
+    );
+    res.json({ sale: lastSales[0] || null });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -750,6 +875,22 @@ app.get('/api/lots/:id', async (req: AuthRequest, res) => {
       }
     }
 
+    // RÈGLE MÉTIER STRICTE (Section 8) : Visibilité des offres
+    // Les professionnels ne voient PAS les offres des autres ni l'historique complet.
+    // Ils voient uniquement leur propre statut et leur propre offre.
+    let userBidStatus: 'NONE' | 'REGISTERED' | 'WON' | 'OUTBID' = 'NONE';
+    if (userMaxBidCents !== null) {
+      const isEnded = lot.status === 'SOLD' || lot.status === 'CLOSED' || new Date(lot.endsAt).getTime() <= Date.now();
+      if (!isEnded) {
+        userBidStatus = isWinning ? 'REGISTERED' : 'OUTBID';
+      } else {
+        userBidStatus = isWinning ? 'WON' : 'OUTBID';
+      }
+    }
+
+    const isRequesterAdmin = req.dbUser?.role === 'ADMIN';
+    const exposedHistory = isRequesterAdmin ? history : [];
+
     // Objet public sécurisé (SANS coût d'achat, SANS prix de réserve, SANS données concurrentes)
     const publicLot = {
       id: lot.id,
@@ -772,9 +913,10 @@ app.get('/api/lots/:id', async (req: AuthRequest, res) => {
       images: lot.images,
       userMaxBidCents, // STRICTEMENT le max de l'utilisateur connecté
       isWinning,
+      userBidStatus,
     };
 
-    res.json({ lot: publicLot, history });
+    res.json({ lot: publicLot, history: exposedHistory });
   } catch (err: any) {
     console.error('Erreur finale /api/lots/:id:', err);
     const lotId = parseInt(req.params.id);
@@ -915,6 +1057,16 @@ app.get('/api/my/dashboard', requireAuth, async (req: AuthRequest, res) => {
           .orderBy(asc(lots.endsAt))
       );
 
+      // Dédupliquer par lotId : retenir l'enchère la plus récente et le plafond le plus élevé
+      const bidsByLotMap = new Map<number, any>();
+      for (const b of myActiveBids) {
+        const existing = bidsByLotMap.get(b.lotId);
+        if (!existing || b.bidId > existing.bidId || b.myMaxBidCents > existing.myMaxBidCents) {
+          bidsByLotMap.set(b.lotId, b);
+        }
+      }
+      myActiveBids = Array.from(bidsByLotMap.values());
+
       // Enchères gagnées / commandes
       myOrders = await withDbRetry(() =>
         db
@@ -1041,6 +1193,98 @@ app.post('/api/orders/:id/paypal/capture', requireAuth, async (req: AuthRequest,
   }
 });
 
+// Simulation de paiement pour tests et validation du délai strict de 24h
+app.post('/api/orders/:id/simulate-payment', requireAuth, async (req: AuthRequest, res) => {
+  try {
+    const orderId = parseInt(req.params.id);
+    const userId = req.dbUser!.id;
+    const isAdmin = req.dbUser?.role === 'ADMIN';
+
+    const orderRes = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (orderRes.length === 0) {
+      return res.status(404).json({ error: 'Commande introuvable.' });
+    }
+    const order = orderRes[0];
+
+    // Vérifier l'autorisation
+    if (!isAdmin && order.buyerId !== userId) {
+      return res.status(403).json({ error: 'Accès non autorisé à cette commande.' });
+    }
+
+    // Récupérer le lot associé pour vérifier l'échéance de 24h
+    const lotRes = await db.select().from(lots).where(eq(lots.id, order.lotId)).limit(1);
+    const lot = lotRes[0];
+
+    const now = new Date();
+    // Vérifier si la commande a été annulée ou si le délai de paiement de 24h est expiré
+    if (order.status === 'CANCELLED') {
+      return res.status(400).json({
+        error: 'Cette commande a été annulée (délai de paiement de 24h dépassé ou réattribution au 2nd enchérisseur).',
+      });
+    }
+
+    if (lot && lot.paymentDueAt && new Date(lot.paymentDueAt).getTime() < now.getTime()) {
+      return res.status(400).json({
+        error: 'Délai de paiement de 24 heures expiré. Le règlement n’est plus accepté.',
+      });
+    }
+
+    if (order.status === 'PAID') {
+      return res.json({ success: true, message: 'Cette commande est déjà réglée.', order });
+    }
+
+    // Valider le paiement
+    const updatedOrder = await db
+      .update(orders)
+      .set({ status: 'PAID', updatedAt: now })
+      .where(eq(orders.id, orderId))
+      .returning();
+
+    if (lot) {
+      await db
+        .update(lots)
+        .set({ paymentStatus: 'PAID', updatedAt: now })
+        .where(eq(lots.id, lot.id));
+    }
+
+    // Insérer un enregistrement de paiement
+    await db.insert(payments).values({
+      orderId,
+      buyerId: order.buyerId,
+      amountCents: order.totalCents,
+      currency: 'EUR',
+      status: 'PAID',
+      provider: 'SIMULATED',
+      paymentDate: now,
+    });
+
+    await db.insert(auditLogs).values({
+      userId,
+      action: 'PAYMENT_SIMULATED',
+      entityType: 'ORDER',
+      entityId: order.orderNumber,
+      details: `Règlement de ${(order.totalCents / 100).toFixed(2)} € validé avec succès pour la commande ${order.orderNumber}.`,
+    });
+
+    try {
+      realtimeHub.sendToUser(order.buyerId, 'order:paid', {
+        orderId,
+        orderNumber: order.orderNumber,
+        status: 'PAID',
+        message: `Votre règlement de ${(order.totalCents / 100).toFixed(2)} € pour la commande ${order.orderNumber} a été validé avec succès.`,
+      });
+    } catch {}
+
+    res.json({
+      success: true,
+      message: 'Paiement simulé enregistré avec succès.',
+      order: updatedOrder[0],
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
 // Documents de transaction client (Reçus légaux / Confirmation de transaction)
 app.get('/api/my/documents', requireAuth, async (req: AuthRequest, res) => {
   try {
@@ -1078,26 +1322,72 @@ app.get('/api/my/documents', requireAuth, async (req: AuthRequest, res) => {
 // Dashboard Admin (Métriques ventes, trésorerie, acquisitions, impayés)
 app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   try {
-    // Vente actuelle
-    const currentSales = await db
-      .select()
-      .from(sales)
-      .where(eq(sales.status, 'LIVE'))
-      .limit(1);
+    const now = new Date();
 
-    const currentSale = currentSales[0] || null;
-    let saleLots: any[] = [];
-    if (currentSale) {
-      saleLots = await db
+    // 1. Vente active en direct (LIVE)
+    const liveSales = await withDbRetry(() =>
+      db
         .select()
-        .from(lots)
-        .where(eq(lots.saleId, currentSale.id));
+        .from(sales)
+        .where(eq(sales.status, 'LIVE'))
+        .orderBy(desc(sales.startsAt))
+        .limit(1)
+    );
+
+    // 2. Prochaines ventes programmées (Mardi ou Vendredi)
+    const upcomingSales = await withDbRetry(() =>
+      db
+        .select()
+        .from(sales)
+        .where(and(or(eq(sales.status, 'SCHEDULED'), eq(sales.status, 'DRAFT')), sql`${sales.endsAt} > ${now}`))
+        .orderBy(asc(sales.startsAt))
+        .limit(3)
+    );
+
+    const activeLiveSale = liveSales[0] || null;
+    
+    // Déterminer la Prochaine Vente et la Vente Suivante
+    // Si une vente est en direct, la Prochaine Vente dans le calendrier futur est la première de upcomingSales
+    // Si aucune vente n'est en direct, la Prochaine Vente est la 1ère de upcomingSales et la Vente Suivante est la 2ème
+    const nextSaleRecord = upcomingSales[0] || null;
+    const followingSaleRecord = upcomingSales[1] || null;
+
+    // Calculer les lots pour chaque vente
+    const targetSaleIds = [
+      ...(activeLiveSale ? [activeLiveSale.id] : []),
+      ...(nextSaleRecord ? [nextSaleRecord.id] : []),
+      ...(followingSaleRecord ? [followingSaleRecord.id] : []),
+    ];
+
+    const countsMap: Record<number, number> = {};
+    if (targetSaleIds.length > 0) {
+      const counts = await withDbRetry(() =>
+        db
+          .select({
+            saleId: lots.saleId,
+            count: sql<number>`count(*)`,
+          })
+          .from(lots)
+          .where(sql`${lots.saleId} IN (${sql.join(targetSaleIds.map((id) => sql`${id}`), sql`, `)})`)
+          .groupBy(lots.saleId)
+      );
+      for (const c of counts) {
+        if (c.saleId) countsMap[c.saleId] = Number(c.count);
+      }
     }
 
-    const totalLots = saleLots.length;
-    const lotsWithBids = saleLots.filter((l) => l.bidCount > 0).length;
+    let liveLots: any[] = [];
+    if (activeLiveSale) {
+      liveLots = await db
+        .select()
+        .from(lots)
+        .where(eq(lots.saleId, activeLiveSale.id));
+    }
+
+    const totalLots = liveLots.length;
+    const lotsWithBids = liveLots.filter((l) => l.bidCount > 0).length;
     const lotsWithoutBids = totalLots - lotsWithBids;
-    const currentAuctionValueCents = saleLots.reduce((acc, l) => acc + l.currentPriceCents, 0);
+    const currentAuctionValueCents = liveLots.reduce((acc, l) => acc + l.currentPriceCents, 0);
 
     // Commandes & Paiements
     const allOrders = await db.select().from(orders);
@@ -1126,13 +1416,25 @@ app.get('/api/admin/dashboard', requireAuth, requireAdmin, async (req: AuthReque
       .where(and(eq(users.role, 'CUSTOMER'), eq(users.status, 'PENDING')));
 
     res.json({
-      currentSale: currentSale
+      currentSale: activeLiveSale
         ? {
-            ...currentSale,
+            ...activeLiveSale,
             totalLots,
             lotsWithBids,
             lotsWithoutBids,
             currentAuctionValueCents,
+          }
+        : null,
+      nextSale: nextSaleRecord
+        ? {
+            ...nextSaleRecord,
+            totalLots: countsMap[nextSaleRecord.id] || 0,
+          }
+        : null,
+      followingSale: followingSaleRecord
+        ? {
+            ...followingSaleRecord,
+            totalLots: countsMap[followingSaleRecord.id] || 0,
           }
         : null,
       ordersMetrics: {
@@ -1203,30 +1505,94 @@ app.put('/api/admin/clients/:id/status', requireAuth, requireAdmin, async (req: 
   }
 });
 
-// Gestion des ventes
+// Gestion des ventes bi-hebdomadaires (Mardi & Vendredi)
 app.get('/api/admin/sales', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   try {
-    const salesList = await db.select().from(sales).orderBy(desc(sales.startsAt));
-    res.json({ sales: salesList });
+    const salesList = await withDbRetry(() => db.select().from(sales).orderBy(desc(sales.startsAt)));
+    
+    // Enrichir avec le nombre de lots
+    const counts = await withDbRetry(() =>
+      db
+        .select({
+          saleId: lots.saleId,
+          count: sql<number>`count(*)`,
+        })
+        .from(lots)
+        .groupBy(lots.saleId)
+    );
+    const countMap: Record<number, number> = {};
+    for (const c of counts) {
+      if (c.saleId) countMap[c.saleId] = Number(c.count);
+    }
+
+    const enriched = salesList.map((s) => ({
+      ...s,
+      totalLots: countMap[s.id] || 0,
+    }));
+
+    res.json({ sales: enriched });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
 });
 
+// Créer une vente (sélection Mardi ou Vendredi, date, heures configurables)
 app.post('/api/admin/sales', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   try {
-    const { reference, title, description, startsAt, endsAt, antiSnipeMinutes } = req.body;
+    const { reference, title, description, saleDay, date, startsAt, endsAt, openTime, closeTime, antiSnipeMinutes, status } = req.body;
+
+    // Règle stricte du calendrier bi-hebdomadaire : Seules les ventes du mardi et du vendredi sont permises
+    if (saleDay && saleDay !== 'MARDI' && saleDay !== 'VENDREDI') {
+      return res.status(400).json({
+        error: "Seules les ventes du mardi ou du vendredi sont autorisées. Les ventes ne peuvent pas être créées pour d'autres jours (ex: lundi ou jeudi)."
+      });
+    }
+
+    const day = (saleDay === 'VENDREDI' ? 'VENDREDI' : 'MARDI') as 'MARDI' | 'VENDREDI';
+    const oTime = openTime || '10:00';
+    const cTime = closeTime || '20:00';
+
+    let sAt: Date;
+    let eAt: Date;
+
+    if (date) {
+      // Vérifier que la date explicite correspond bien au jour sélectionné
+      const parsedDate = new Date(`${date}T12:00:00Z`);
+      const dayOfWeek = parsedDate.getUTCDay(); // 0: Sun, 1: Mon, 2: Tue, 3: Wed, 4: Thu, 5: Fri, 6: Sat
+      if (day === 'MARDI' && dayOfWeek !== 2) {
+        return res.status(400).json({ error: "La date spécifiée ne correspond pas à un mardi." });
+      }
+      if (day === 'VENDREDI' && dayOfWeek !== 5) {
+        return res.status(400).json({ error: "La date spécifiée ne correspond pas à un vendredi." });
+      }
+
+      sAt = new Date(`${date}T${oTime}:00`);
+      eAt = new Date(`${date}T${cTime}:00`);
+    } else if (startsAt && endsAt) {
+      sAt = new Date(startsAt);
+      eAt = new Date(endsAt);
+    } else {
+      const computed = calculateNextSaleDates(day, new Date(), oTime, cTime);
+      sAt = computed.startsAt;
+      eAt = computed.endsAt;
+    }
+
+    const ref = reference || `VENTE-${day === 'MARDI' ? 'MAR' : 'VEN'}-${Date.now().toString().slice(-4)}`;
+    const saleTitle = title || (day === 'MARDI' ? `Vente Privée du Mardi (${formatSaleDateHeader(sAt)})` : `Vente Privée du Vendredi (${formatSaleDateHeader(sAt)})`);
 
     const newSale = await db
       .insert(sales)
       .values({
-        reference,
-        title,
-        description,
-        startsAt: new Date(startsAt),
-        endsAt: new Date(endsAt),
+        reference: ref,
+        title: saleTitle,
+        description: description || `Vente privée exclusive pour les professionnels antiquaires et brocanteurs (${day.toLowerCase()}).`,
+        saleDay: day,
+        status: status || 'SCHEDULED',
+        startsAt: sAt,
+        endsAt: eAt,
+        openTime: oTime,
+        closeTime: cTime,
         antiSnipeMinutes: antiSnipeMinutes || 2,
-        status: 'DRAFT',
       })
       .returning();
 
@@ -1234,11 +1600,223 @@ app.post('/api/admin/sales', requireAuth, requireAdmin, async (req: AuthRequest,
       userId: req.dbUser!.id,
       action: 'CREATE_SALE',
       entityType: 'SALE',
-      entityId: reference,
-      details: `Création de la vente ${reference}: "${title}"`,
+      entityId: ref,
+      details: `Création de la vente ${ref}: "${saleTitle}" (${day}) - ${formatSaleHours(sAt, eAt)}`,
     });
 
     res.json({ sale: newSale[0] });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mettre à jour une vente (statut, horaires, titre, etc.)
+app.put('/api/admin/sales/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const saleId = parseInt(req.params.id);
+    const { title, description, saleDay, status, startsAt, endsAt, openTime, closeTime } = req.body;
+
+    const updateData: any = { updatedAt: new Date() };
+    if (title) updateData.title = title;
+    if (description !== undefined) updateData.description = description;
+    if (saleDay) updateData.saleDay = saleDay;
+    if (status) updateData.status = status;
+    if (openTime) updateData.openTime = openTime;
+    if (closeTime) updateData.closeTime = closeTime;
+    if (startsAt) updateData.startsAt = new Date(startsAt);
+    if (endsAt) {
+      updateData.endsAt = new Date(endsAt);
+      // Synchroniser l'échéance des lots attachés
+      await db.update(lots).set({ endsAt: new Date(endsAt) }).where(eq(lots.saleId, saleId));
+    }
+
+    const updated = await db.update(sales).set(updateData).where(eq(sales.id, saleId)).returning();
+
+    // Si statut passé à LIVE, activer les lots
+    if (status === 'LIVE') {
+      await db.update(lots).set({ status: 'ACTIVE' }).where(and(eq(lots.saleId, saleId), eq(lots.status, 'DRAFT')));
+    }
+
+    await db.insert(auditLogs).values({
+      userId: req.dbUser!.id,
+      action: 'UPDATE_SALE',
+      entityType: 'SALE',
+      entityId: updated[0].reference,
+      details: `Mise à jour de la vente ${updated[0].reference} (Statut: ${status || updated[0].status})`,
+    });
+
+    res.json({ sale: updated[0] });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Assigner des lots à une vente
+app.post('/api/admin/sales/:id/lots', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const saleId = parseInt(req.params.id);
+    const { lotIds } = req.body;
+    if (!Array.isArray(lotIds)) {
+      return res.status(400).json({ error: 'lotIds doit être un tableau d’identifiants de lots.' });
+    }
+
+    const saleRes = await db.select().from(sales).where(eq(sales.id, saleId)).limit(1);
+    if (saleRes.length === 0) return res.status(404).json({ error: 'Vente introuvable.' });
+    const sale = saleRes[0];
+
+    // Règle d'exclusivité stricte : un même lot ne doit jamais appartenir à deux ventes simultanément
+    for (const lotId of lotIds) {
+      const existingLot = await db.select().from(lots).where(eq(lots.id, lotId)).limit(1);
+      if (existingLot.length > 0 && existingLot[0].saleId && existingLot[0].saleId !== saleId) {
+        return res.status(400).json({
+          error: `ACTION REFUSÉE : Le lot ${existingLot[0].reference} est déjà affecté à une autre vente (Vente ID #${existingLot[0].saleId}). Un même objet ne peut jamais appartenir à deux ventes simultanément. Retirez-le de son ancienne vente avant de le réaffecter.`
+        });
+      }
+    }
+
+    for (const lotId of lotIds) {
+      await db
+        .update(lots)
+        .set({
+          saleId,
+          endsAt: sale.endsAt,
+          updatedAt: new Date(),
+        })
+        .where(eq(lots.id, lotId));
+    }
+
+    res.json({ success: true, count: lotIds.length });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Retirer un lot d'une vente
+app.delete('/api/admin/sales/:id/lots/:lotId', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const lotId = parseInt(req.params.lotId);
+    await db.update(lots).set({ saleId: null, updatedAt: new Date() }).where(eq(lots.id, lotId));
+    res.json({ success: true });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Synthèse détaillée d'une vente (avec 1er et 2ème enchérisseurs, paiements et options de transmission)
+app.get('/api/admin/sales/:id/summary', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const saleId = parseInt(req.params.id);
+    const saleRes = await db.select().from(sales).where(eq(sales.id, saleId)).limit(1);
+    if (saleRes.length === 0) return res.status(404).json({ error: 'Vente introuvable.' });
+    const sale = saleRes[0];
+
+    const saleLots = await db
+      .select({
+        lot: lots,
+        winner: {
+          id: users.id,
+          email: users.email,
+          companyName: users.companyName,
+          phone: users.phone,
+        },
+      })
+      .from(lots)
+      .leftJoin(users, eq(lots.currentWinnerId, users.id))
+      .where(eq(lots.saleId, saleId))
+      .orderBy(asc(lots.id));
+
+    const enrichedLots = await Promise.all(
+      saleLots.map(async (item) => {
+        const l = item.lot;
+        let secondBidderInfo: any = null;
+
+        if (l.secondWinnerId) {
+          const secondUser = await db.select().from(users).where(eq(users.id, l.secondWinnerId)).limit(1);
+          if (secondUser.length > 0) {
+            secondBidderInfo = {
+              id: secondUser[0].id,
+              email: secondUser[0].email,
+              companyName: secondUser[0].companyName,
+              amountCents: l.secondBidAmountCents,
+            };
+          }
+        } else if (l.currentWinnerId) {
+          const secondBids = await db
+            .select()
+            .from(bids)
+            .where(and(eq(bids.lotId, l.id), sql`${bids.userId} != ${l.currentWinnerId}`))
+            .orderBy(desc(bids.maxBidCents), asc(bids.createdAt))
+            .limit(1);
+          if (secondBids.length > 0) {
+            const secondUser = await db.select().from(users).where(eq(users.id, secondBids[0].userId)).limit(1);
+            if (secondUser.length > 0) {
+              secondBidderInfo = {
+                id: secondUser[0].id,
+                email: secondUser[0].email,
+                companyName: secondUser[0].companyName,
+                amountCents: secondBids[0].maxBidCents,
+              };
+            }
+          }
+        }
+
+        const orderRes = await db.select().from(orders).where(eq(orders.lotId, l.id)).orderBy(desc(orders.id)).limit(1);
+        const order = orderRes[0] || null;
+
+        return {
+          lot: l,
+          winner: item.winner,
+          secondBidder: secondBidderInfo,
+          order,
+          canOfferSecond: Boolean(secondBidderInfo && order && order.status === 'AWAITING_PAYMENT' && l.paymentStatus !== 'PAID'),
+        };
+      })
+    );
+
+    res.json({
+      sale,
+      lots: enrichedLots,
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Proposer au deuxième meilleur enchérisseur
+app.post('/api/admin/lots/:id/offer-second-bidder', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const lotId = parseInt(req.params.id);
+    const result = await offerLotToSecondBidder(lotId);
+    if (!result.success) {
+      return res.status(400).json({ error: result.message });
+    }
+    res.json(result);
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Traitement administratif d'un lot impayé (ex: cas sans 2e enchérisseur)
+app.post('/api/admin/lots/:id/mark-unpaid', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const lotId = parseInt(req.params.id);
+    const now = new Date();
+
+    await db
+      .update(orders)
+      .set({ status: 'CANCELLED', notes: 'Défaut de paiement sous 24h - Pris en charge par l’administration' })
+      .where(and(eq(orders.lotId, lotId), eq(orders.status, 'AWAITING_PAYMENT')));
+
+    await db
+      .update(lots)
+      .set({
+        paymentStatus: 'UNPAID',
+        status: 'UNSOLD',
+        updatedAt: now,
+      })
+      .where(eq(lots.id, lotId));
+
+    res.json({ success: true, message: 'Lot marqué comme impayé et prêt pour traitement administratif.' });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
@@ -1252,6 +1830,9 @@ app.put('/api/admin/sales/:id/publish', requireAuth, requireAdmin, async (req: A
       .set({ status: 'LIVE', updatedAt: new Date() })
       .where(eq(sales.id, saleId))
       .returning();
+
+    // Activer tous les lots rattachés à cette vente
+    await db.update(lots).set({ status: 'ACTIVE' }).where(eq(lots.saleId, saleId));
 
     await db.insert(auditLogs).values({
       userId: req.dbUser!.id,
@@ -1270,16 +1851,20 @@ app.put('/api/admin/sales/:id/publish', requireAuth, requireAdmin, async (req: A
 // Gestion des lots (Vue complète avec prix de réserve et coûts internes)
 app.get('/api/admin/lots', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
   try {
+    const secondUsers = alias(users, 'second_winner_user');
     const allLots = await db
       .select({
         lot: lots,
         saleReference: sales.reference,
         winnerEmail: users.email,
         winnerCompany: users.companyName,
+        secondWinnerEmail: secondUsers.email,
+        secondWinnerCompany: secondUsers.companyName,
       })
       .from(lots)
       .leftJoin(sales, eq(lots.saleId, sales.id))
       .leftJoin(users, eq(lots.currentWinnerId, users.id))
+      .leftJoin(secondUsers, eq(lots.secondWinnerId, secondUsers.id))
       .orderBy(desc(lots.id));
 
     res.json({ lots: allLots });

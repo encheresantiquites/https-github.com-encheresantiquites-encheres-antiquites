@@ -1,35 +1,38 @@
 import { db } from '../db/index.ts';
 import { lots, bids, bidHistory, users, auditLogs, orders, transactionDocuments, sales } from '../db/schema.ts';
-import { eq, and, desc, sql } from 'drizzle-orm';
+import { eq, and, desc, asc, sql } from 'drizzle-orm';
 import { realtimeHub } from './realtime.ts';
 import { inMemoryAuctionStore } from './in-memory-store.ts';
+import { calculateShipping } from '../lib/shipping.ts';
+import { calculateNextSaleDates } from '../lib/sales-schedule.ts';
 
 /**
- * Règle d'horaire officielle de la plateforme :
- * Chaque lot commence le lundi à 10h et se termine le dimanche à 22h (Heure de Paris).
+ * Règle du calendrier officiel de la plateforme :
+ * Deux ventes privées par semaine : MARDI et VENDREDI.
+ * Si un lot n'a pas reçu d'offre ou n'a pas atteint le prix de réserve,
+ * il est automatiquement reprogrammé pour la prochaine vente officielle (Mardi ou Vendredi).
  */
 export function getNextStandardLotSchedule(refDate: Date = new Date()): { startsAt: Date; endsAt: Date } {
   const d = new Date(refDate);
-  const day = d.getDay(); // 0: Dimanche, 1: Lundi, ..., 6: Samedi
+  const day = d.getDay(); // 0: Dimanche, 1: Lundi, 2: Mardi, 3: Mercredi, 4: Jeudi, 5: Vendredi, 6: Samedi
   
-  let mondayOffset = 1 - day;
-  if (day === 0) {
-    if (d.getHours() >= 22) {
-      mondayOffset = 1; // Prochain lundi
-    } else {
-      mondayOffset = -6; // Lundi de la semaine en cours
-    }
+  // Si avant mardi soir -> Vente du Mardi
+  // Si entre mardi soir et vendredi soir -> Vente du Vendredi
+  // Si après vendredi soir -> Vente du Mardi suivant
+  let targetDay: 'MARDI' | 'VENDREDI' = 'MARDI';
+  if (day === 2 && d.getHours() >= 20) {
+    targetDay = 'VENDREDI';
+  } else if (day === 3 || day === 4) {
+    targetDay = 'VENDREDI';
+  } else if (day === 5 && d.getHours() >= 20) {
+    targetDay = 'MARDI';
+  } else if (day === 5) {
+    targetDay = 'VENDREDI';
+  } else if (day === 6 || day === 0 || day === 1) {
+    targetDay = 'MARDI';
   }
 
-  const monday = new Date(d);
-  monday.setDate(d.getDate() + mondayOffset);
-  monday.setHours(10, 0, 0, 0);
-
-  const sunday = new Date(monday);
-  sunday.setDate(monday.getDate() + 6);
-  sunday.setHours(22, 0, 0, 0);
-
-  return { startsAt: monday, endsAt: sunday };
+  return calculateNextSaleDates(targetDay, d);
 }
 
 /**
@@ -86,6 +89,25 @@ export async function placeProxyBid(
 
     if (lot.endsAt.getTime() <= now.getTime()) {
       return { success: false, message: 'La vente pour cet objet est clôturée.' };
+    }
+
+    // Vérifier également le statut de la vente si le lot y est rattaché
+    if (lot.saleId) {
+      const saleRes = await tx.select().from(sales).where(eq(sales.id, lot.saleId)).limit(1);
+      if (saleRes.length > 0) {
+        const sale = saleRes[0];
+        if (sale.status !== 'LIVE') {
+          return {
+            success: false,
+            message: ['SCHEDULED', 'DRAFT'].includes(sale.status)
+              ? 'La vente n’est pas encore ouverte aux enchères.'
+              : 'La vente pour cet objet est clôturée.',
+          };
+        }
+        if (sale.endsAt.getTime() <= now.getTime()) {
+          return { success: false, message: 'La vente pour cet objet est clôturée.' };
+        }
+      }
     }
 
     // Calcul du minimum requis
@@ -409,16 +431,43 @@ export async function closeExpiredLot(lotId: number): Promise<void> {
       return;
     }
 
-    // Le lot est ADJUGÉ / VENDU
+    // Identifier le deuxième meilleur enchérisseur pour ce lot
+    const otherBids = await tx
+      .select({
+        userId: bids.userId,
+        maxBidCents: sql<number>`max(${bids.maxBidCents})`,
+      })
+      .from(bids)
+      .where(and(eq(bids.lotId, lotId), sql`${bids.userId} != ${lot.currentWinnerId}`))
+      .groupBy(bids.userId)
+      .orderBy(desc(sql`max(${bids.maxBidCents})`))
+      .limit(1);
+
+    const secondWinnerId = otherBids.length > 0 ? otherBids[0].userId : null;
+    const secondBidAmountCents = otherBids.length > 0 ? Number(otherBids[0].maxBidCents) : 0;
+    const paymentDueAt = new Date(now.getTime() + 24 * 3600 * 1000); // Délai strict de 24h
+
+    // Le lot est ADJUGÉ / VENDU -> Passe au statut À PAYER
     await tx
       .update(lots)
-      .set({ status: 'SOLD', updatedAt: now })
+      .set({
+        status: 'SOLD',
+        secondWinnerId,
+        secondBidAmountCents,
+        paymentDueAt,
+        paymentStatus: 'AWAITING_PAYMENT',
+        updatedAt: now,
+      })
       .where(eq(lots.id, lotId));
 
-    // Créer la commande
+    // Créer la commande avec la grille tarifaire unique de livraison (FR / BE)
     const orderNumber = `CMD-${new Date().getFullYear()}-${String(lot.id).padStart(4, '0')}`;
-    const shippingEstimateCents = 2500; // 25 € forfait sécurisé standard
-    const totalCents = lot.currentPriceCents + shippingEstimateCents;
+    const shippingCalc = calculateShipping(lot.weight, {
+      shippingQuoteRequired: Boolean((lot as any).shippingQuoteRequired),
+      customShippingCostCents: (lot as any).customShippingCostCents,
+    });
+    const shippingCostCents = shippingCalc.costCents;
+    const totalCents = lot.currentPriceCents + shippingCostCents;
 
     const orderInsert = await tx
       .insert(orders)
@@ -427,7 +476,7 @@ export async function closeExpiredLot(lotId: number): Promise<void> {
         lotId: lot.id,
         buyerId: lot.currentWinnerId,
         finalPriceCents: lot.currentPriceCents,
-        shippingCostCents: shippingEstimateCents,
+        shippingCostCents,
         totalCents,
         status: 'AWAITING_PAYMENT',
       })
@@ -437,7 +486,192 @@ export async function closeExpiredLot(lotId: number): Promise<void> {
       action: 'CLOSE_LOT_SOLD',
       entityType: 'ORDER',
       entityId: orderNumber,
-      details: `Lot ${lot.reference} remporté pour ${(lot.currentPriceCents / 100).toFixed(2)} € par l'utilisateur ID ${lot.currentWinnerId}. Commande ${orderNumber} générée.`,
+      details: `Lot ${lot.reference} remporté pour ${(lot.currentPriceCents / 100).toFixed(2)} € par l'utilisateur ID ${lot.currentWinnerId}. 2ème enchérisseur: ID ${secondWinnerId || 'Aucun'} (${(secondBidAmountCents / 100).toFixed(2)} €). Commande ${orderNumber} générée (délai 24h).`,
     });
+
+    try {
+      realtimeHub.sendToUser(lot.currentWinnerId, 'order:won', {
+        lotId: lot.id,
+        lotReference: lot.reference,
+        lotTitle: lot.title,
+        orderNumber,
+        finalPriceCents: lot.currentPriceCents,
+        paymentDueAt,
+        message: `Félicitations ! Vous avez remporté le lot ${lot.reference}. Votre règlement de ${(lot.currentPriceCents / 100).toFixed(2)} € est attendu sous 24h.`,
+      });
+    } catch {}
   });
+}
+
+/**
+ * Propose le lot au deuxième meilleur enchérisseur en cas de non-paiement du gagnant dans les 24h
+ */
+export async function offerLotToSecondBidder(lotId: number): Promise<{ success: boolean; message: string }> {
+  return await db.transaction(async (tx) => {
+    const lotRes = await tx.select().from(lots).where(eq(lots.id, lotId)).for('update');
+    if (lotRes.length === 0) return { success: false, message: 'Lot introuvable.' };
+    const lot = lotRes[0];
+
+    // Trouver tous les enchérisseurs précédents dont la commande a déjà été annulée ou qui ont déjà remporté/refusé
+    const pastOrders = await tx
+      .select({ buyerId: orders.buyerId, status: orders.status })
+      .from(orders)
+      .where(eq(orders.lotId, lotId));
+
+    const excludedUserIds = new Set<number>();
+    for (const o of pastOrders) {
+      if (o.status === 'CANCELLED') {
+        excludedUserIds.add(o.buyerId);
+      }
+    }
+    if (lot.currentWinnerId) {
+      excludedUserIds.add(lot.currentWinnerId);
+    }
+
+    // Récupérer le classement des enchérisseurs par montant maximum décroissant
+    const candidateBids = await tx
+      .select({
+        userId: bids.userId,
+        maxBidCents: sql<number>`max(${bids.maxBidCents})`,
+      })
+      .from(bids)
+      .where(eq(bids.lotId, lotId))
+      .groupBy(bids.userId)
+      .orderBy(desc(sql`max(${bids.maxBidCents})`));
+
+    const nextCandidate = candidateBids.find((b) => !excludedUserIds.has(b.userId));
+
+    if (!nextCandidate) {
+      // Annuler la commande impayée en cours
+      await tx
+        .update(orders)
+        .set({ status: 'CANCELLED', notes: 'Annulé pour défaut de paiement sous 24h - Aucun enchérisseur suivant' })
+        .where(and(eq(orders.lotId, lotId), eq(orders.status, 'AWAITING_PAYMENT')));
+
+      await tx
+        .update(lots)
+        .set({
+          status: 'UNSOLD',
+          paymentStatus: 'UNPAID',
+          updatedAt: new Date(),
+        })
+        .where(eq(lots.id, lotId));
+
+      return {
+        success: false,
+        message: 'Aucun deuxième ou prochain enchérisseur disponible pour ce lot.',
+      };
+    }
+
+    const now = new Date();
+    const newPaymentDueAt = new Date(now.getTime() + 24 * 3600 * 1000); // 24h accordées au prochain enchérisseur
+
+    // Annuler la commande impayée en cours
+    await tx
+      .update(orders)
+      .set({ status: 'CANCELLED', notes: 'Annulé pour défaut de paiement sous 24h - Transmis au candidat suivant' })
+      .where(and(eq(orders.lotId, lotId), eq(orders.status, 'AWAITING_PAYMENT')));
+
+    // Nouveau montant d'adjudication pour le prochain enchérisseur
+    const finalPriceCents = Number(nextCandidate.maxBidCents);
+    const shippingCalc = calculateShipping(lot.weight, {
+      shippingQuoteRequired: Boolean((lot as any).shippingQuoteRequired),
+      customShippingCostCents: (lot as any).customShippingCostCents,
+    });
+    const shippingCostCents = shippingCalc.costCents;
+    const totalCents = finalPriceCents + shippingCostCents;
+
+    const rankSuffix = excludedUserIds.size === 1 ? '2ND' : `${excludedUserIds.size + 1}TH`;
+    const orderNumber = `CMD-${now.getFullYear()}-${String(lot.id).padStart(4, '0')}-${rankSuffix}`;
+
+    await tx.insert(orders).values({
+      orderNumber,
+      lotId: lot.id,
+      buyerId: nextCandidate.userId,
+      finalPriceCents,
+      shippingCostCents,
+      totalCents,
+      status: 'AWAITING_PAYMENT',
+      notes: `Attribué à l'enchérisseur suivant (ID ${nextCandidate.userId}) suite au défaut de paiement.`,
+    });
+
+    // Mettre à jour le lot
+    await tx
+      .update(lots)
+      .set({
+        currentWinnerId: nextCandidate.userId,
+        currentPriceCents: finalPriceCents,
+        paymentStatus: 'OFFERED_SECOND',
+        offeredToSecondAt: now,
+        paymentDueAt: newPaymentDueAt,
+        updatedAt: now,
+      })
+      .where(eq(lots.id, lotId));
+
+    // Audit log
+    await tx.insert(auditLogs).values({
+      action: 'OFFER_TO_NEXT_BIDDER',
+      entityType: 'LOT',
+      entityId: lot.reference,
+      details: `Lot ${lot.reference} réattribué au candidat suivant (ID ${nextCandidate.userId}) pour ${(finalPriceCents / 100).toFixed(2)} €. Commande ${orderNumber} créée (délai 24h).`,
+    });
+
+    // Notification ciblée au bénéficiaire suivant
+    try {
+      realtimeHub.sendToUser(nextCandidate.userId, 'order:offered', {
+        lotId: lot.id,
+        lotReference: lot.reference,
+        lotTitle: lot.title,
+        orderNumber,
+        finalPriceCents,
+        paymentDueAt: newPaymentDueAt,
+        message: `Le lot ${lot.reference} vous est proposé pour ${(finalPriceCents / 100).toFixed(2)} € suite à un défaut de paiement. Vous disposez de 24h pour finaliser le règlement.`,
+      });
+    } catch {}
+
+    return {
+      success: true,
+      message: `Le lot ${lot.reference} a été proposé avec succès à l'enchérisseur suivant pour ${(finalPriceCents / 100).toFixed(2)} € (délai 24h accordé).`,
+    };
+  });
+}
+
+/**
+ * Tâche d'arrière-plan automatisée :
+ * 1. Ouvre les ventes programmées lorsque leur heure est atteinte
+ * 2. Clôture les ventes en cours et détermine les vainqueurs
+ */
+export async function updateSalesStatusesAndClosures(): Promise<void> {
+  try {
+    const now = new Date();
+
+    // 1. Ouvrir les ventes programmées arrivées à échéance
+    const scheduledSales = await db
+      .select()
+      .from(sales)
+      .where(and(eq(sales.status, 'SCHEDULED'), sql`${sales.startsAt} <= ${now}`, sql`${sales.endsAt} > ${now}`));
+
+    for (const s of scheduledSales) {
+      await db.update(sales).set({ status: 'LIVE', updatedAt: now }).where(eq(sales.id, s.id));
+      await db.update(lots).set({ status: 'ACTIVE', updatedAt: now }).where(and(eq(lots.saleId, s.id), eq(lots.status, 'DRAFT')));
+      console.log(`[Sales Scheduler] Vente ${s.reference} passée à LIVE.`);
+    }
+
+    // 2. Clôturer les ventes en cours arrivées à terme
+    const liveSales = await db
+      .select()
+      .from(sales)
+      .where(and(eq(sales.status, 'LIVE'), sql`${sales.endsAt} <= ${now}`));
+
+    for (const s of liveSales) {
+      await db.update(sales).set({ status: 'ENDED', updatedAt: now }).where(eq(sales.id, s.id));
+      const saleLots = await db.select({ id: lots.id }).from(lots).where(and(eq(lots.saleId, s.id), eq(lots.status, 'ACTIVE')));
+      for (const l of saleLots) {
+        await closeExpiredLot(l.id);
+      }
+      console.log(`[Sales Scheduler] Vente ${s.reference} passée à ENDED (${saleLots.length} lots clôturés).`);
+    }
+  } catch (err) {
+    console.warn('[Sales Scheduler] Erreur lors de la mise à jour des statuts des ventes:', err);
+  }
 }

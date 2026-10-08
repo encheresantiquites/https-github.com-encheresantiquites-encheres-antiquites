@@ -38,15 +38,18 @@ export const users = pgTable('users', {
   updatedAt: timestamp('updated_at').defaultNow(),
 });
 
-// Weekly sales (Ventes hebdomadaires)
+// Weekly sales (Ventes privées bi-hebdomadaires : Mardi & Vendredi)
 export const sales = pgTable('sales', {
   id: serial('id').primaryKey(),
-  reference: text('reference').notNull().unique(), // e.g. 'VENTE-2026-001'
+  reference: text('reference').notNull().unique(), // e.g. 'VENTE-2026-M01' ou 'VENTE-2026-V01'
   title: text('title').notNull(),
   description: text('description'),
-  status: text('status').notNull().default('DRAFT'), // 'DRAFT' | 'SCHEDULED' | 'LIVE' | 'CLOSED' | 'CANCELLED'
+  saleDay: text('sale_day').notNull().default('MARDI'), // 'MARDI' | 'VENDREDI'
+  status: text('status').notNull().default('DRAFT'), // 'DRAFT' | 'SCHEDULED' | 'LIVE' | 'ENDED' | 'CLOSED' | 'CANCELLED'
   startsAt: timestamp('starts_at').notNull(),
   endsAt: timestamp('ends_at').notNull(),
+  openTime: text('open_time').default('10:00'), // Heure d'ouverture configurable (ex: 10:00)
+  closeTime: text('close_time').default('20:00'), // Heure de clôture configurable (ex: 20:00)
   antiSnipeMinutes: integer('anti_snipe_minutes').notNull().default(2),
   antiSnipeTriggerSeconds: integer('anti_snipe_trigger_seconds').notNull().default(120),
   createdAt: timestamp('created_at').defaultNow(),
@@ -72,6 +75,11 @@ export const lots = pgTable('lots', {
   currentPriceCents: integer('current_price_cents').notNull(),
   bidCount: integer('bid_count').notNull().default(0),
   currentWinnerId: integer('current_winner_id').references(() => users.id),
+  secondWinnerId: integer('second_winner_id').references(() => users.id),
+  secondBidAmountCents: integer('second_bid_amount_cents').default(0),
+  paymentDueAt: timestamp('payment_due_at'),
+  offeredToSecondAt: timestamp('offered_to_second_at'),
+  paymentStatus: text('payment_status').default('PENDING'), // 'PENDING' | 'AWAITING_PAYMENT' | 'PAID' | 'OVERDUE' | 'OFFERED_SECOND'
   status: text('status').notNull().default('ACTIVE'), // 'DRAFT' | 'ACTIVE' | 'SOLD' | 'RESERVE_NOT_MET' | 'UNSOLD' | 'CANCELLED'
   endsAt: timestamp('ends_at').notNull(),
   images: json('images').$type<string[]>().default([]),
@@ -83,6 +91,9 @@ export const lots = pgTable('lots', {
   acquisitionSource: text('acquisition_source'),
   acquisitionDate: timestamp('acquisition_date'),
   acquisitionNotes: text('acquisition_notes'),
+  shippingQuoteRequired: boolean('shipping_quote_required').default(false),
+  shippingNote: text('shipping_note'),
+  customShippingCostCents: integer('custom_shipping_cost_cents'),
   
   createdAt: timestamp('created_at').defaultNow(),
   updatedAt: timestamp('updated_at').defaultNow(),

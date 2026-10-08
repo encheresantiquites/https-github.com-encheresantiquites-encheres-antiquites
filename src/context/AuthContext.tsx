@@ -163,6 +163,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     try {
       localStorage.removeItem('enchere_auth_token');
       localStorage.removeItem('enchere_auth_user');
+      localStorage.removeItem('enchere_current_tab');
     } catch {}
   };
 
