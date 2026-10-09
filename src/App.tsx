@@ -290,7 +290,11 @@ function AppContent() {
                         <span className="text-amber-300 font-semibold">{salesSchedule.currentSale.totalLots || 0} lots sélectionnés</span>
                       </div>
                       {/* Compte à rebours Section 15 */}
-                      <LiveCountdown targetDate={salesSchedule.currentSale.endsAt} />
+                      <LiveCountdown
+                        startDate={salesSchedule.currentSale.startsAt}
+                        targetDate={salesSchedule.currentSale.endsAt}
+                        closeTimeLabel="22h00"
+                      />
                     </div>
                   ) : (
                     <div className="py-2 text-xs text-slate-300 space-y-1">

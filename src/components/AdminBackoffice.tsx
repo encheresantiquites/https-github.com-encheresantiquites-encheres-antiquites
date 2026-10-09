@@ -84,7 +84,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
       return dates.startsAt.toISOString().split('T')[0];
     })(),
     openTime: '10:00',
-    closeTime: '20:00',
+    closeTime: '22:00',
     title: 'Vente Privée Hebdomadaire — Objets d\'Art & Curiosités',
     description: 'Vente privée bi-hebdomadaire courte réservée exclusivement aux antiquaires et brocanteurs professionnels.',
     status: 'SCHEDULED' as 'DRAFT' | 'SCHEDULED',
@@ -654,9 +654,14 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
               <div className="flex items-center justify-between mb-3">
                 <div className="flex items-center gap-2">
                   <div className="w-2.5 h-2.5 rounded-full bg-[#D4AF37] animate-pulse"></div>
-                  <span className="text-xs uppercase tracking-widest font-black text-[#D4AF37]">
-                    PROCHAINE VENTE
-                  </span>
+                  <div>
+                    <span className="text-xs uppercase tracking-widest font-black text-[#D4AF37] block">
+                      PROCHAINE VENTE
+                    </span>
+                    <span className="text-[11px] font-mono text-amber-200/90 font-bold block">
+                      Mardi ou Vendredi • 10h00 → 22h00
+                    </span>
+                  </div>
                 </div>
                 {(() => {
                   const targetSale = metrics?.nextSale || metrics?.currentSale;
@@ -674,16 +679,20 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                 const targetSale = metrics?.nextSale || metrics?.currentSale;
                 if (!targetSale) {
                   return (
-                    <div className="py-4 text-center">
+                    <div className="py-4 text-center space-y-2">
+                      <div className="border border-slate-700/60 bg-slate-900/60 rounded-xl p-3">
+                        <span className="text-xs font-mono font-bold text-amber-300 block">Mardi ou Vendredi</span>
+                        <span className="font-mono text-sm font-bold text-amber-200">10h00 → 22h00</span>
+                      </div>
                       <p className="text-xs text-slate-400 italic">Aucune vente programmée pour le moment.</p>
                       <button
                         onClick={() => {
                           setAdminTab('sales');
                           setNewSaleModalOpen(true);
                         }}
-                        className="mt-2 bg-[#D4AF37] text-slate-950 px-3 py-1.5 rounded-lg text-xs font-bold"
+                        className="mt-2 bg-[#D4AF37] text-slate-950 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer"
                       >
-                        + Créer la vente du Mardi ou Vendredi
+                        + Créer la vente du Mardi ou Vendredi (10h00 → 22h00)
                       </button>
                     </div>
                   );
@@ -735,9 +744,14 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
             {/* VENTE SUIVANTE */}
             <div className="bg-[#1C2541]/90 border border-slate-700/80 rounded-2xl p-5 shadow-lg relative">
               <div className="flex items-center justify-between mb-3">
-                <span className="text-xs uppercase tracking-widest font-black text-slate-300">
-                  VENTE SUIVANTE
-                </span>
+                <div>
+                  <span className="text-xs uppercase tracking-widest font-black text-slate-300 block">
+                    VENTE SUIVANTE
+                  </span>
+                  <span className="text-[11px] font-mono text-slate-400 font-bold block">
+                    Mardi ou Vendredi • 10h00 → 22h00
+                  </span>
+                </div>
                 {metrics?.followingSale ? (
                   <span className={`text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase ${getSaleStatusBadge(metrics.followingSale.status).className}`}>
                     STATUT : {getSaleStatusBadge(metrics.followingSale.status).label}
@@ -753,7 +767,11 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                 const following = metrics?.followingSale;
                 if (!following) {
                   return (
-                    <div className="py-4 text-center">
+                    <div className="py-4 text-center space-y-2">
+                      <div className="border border-slate-700/60 bg-slate-900/60 rounded-xl p-3">
+                        <span className="text-xs font-mono font-bold text-slate-300 block">Mardi ou Vendredi</span>
+                        <span className="font-mono text-sm font-bold text-slate-200">10h00 → 22h00</span>
+                      </div>
                       <p className="text-xs text-slate-400 mb-2">
                         La session suivante (Mardi ou Vendredi) est en cours de préparation.
                       </p>
@@ -764,7 +782,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                         }}
                         className="border border-[#D4AF37] text-amber-300 hover:bg-[#D4AF37]/10 px-3 py-1.5 rounded-lg text-xs font-semibold cursor-pointer"
                       >
-                        + Programmer la vente suivante
+                        + Programmer la vente suivante (10h00 → 22h00)
                       </button>
                     </div>
                   );

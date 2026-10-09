@@ -1,10 +1,10 @@
-import { Sale, SaleDay, SaleStatus } from '../types/index.ts';
+import type { Sale, SaleDay, SaleStatus } from '../types/index.ts';
 
 /**
  * CALENDRIER COMMERCIAL OFFICIEL — ENCHÈRES ANTIQUITÉS
  * Deux ventes privées par semaine :
- * - MARDI = Vente #1 (ex: 10h00 → 20h00, configurable)
- * - VENDREDI = Vente #2 (ex: 10h00 → 20h00, configurable)
+ * - MARDI = Vente #1 (10h00 → 22h00)
+ * - VENDREDI = Vente #2 (10h00 → 22h00)
  * 
  * Lundi & Jeudi : Journées exclusives de préparation et programmation.
  * Jamais de vente automatique le lundi ou le jeudi.
@@ -12,16 +12,16 @@ import { Sale, SaleDay, SaleStatus } from '../types/index.ts';
 
 export interface SaleScheduleConfig {
   tuesdayOpenTime: string;  // e.g. "10:00"
-  tuesdayCloseTime: string; // e.g. "20:00"
+  tuesdayCloseTime: string; // e.g. "22:00"
   fridayOpenTime: string;   // e.g. "10:00"
-  fridayCloseTime: string;  // e.g. "20:00"
+  fridayCloseTime: string;  // e.g. "22:00"
 }
 
 export const DEFAULT_SCHEDULE_CONFIG: SaleScheduleConfig = {
   tuesdayOpenTime: '10:00',
-  tuesdayCloseTime: '20:00',
+  tuesdayCloseTime: '22:00',
   fridayOpenTime: '10:00',
-  fridayCloseTime: '20:00',
+  fridayCloseTime: '22:00',
 };
 
 /**
@@ -29,13 +29,13 @@ export const DEFAULT_SCHEDULE_CONFIG: SaleScheduleConfig = {
  * @param day 'MARDI' | 'VENDREDI'
  * @param fromDate Date de référence
  * @param openTime Heure d'ouverture (ex: "10:00")
- * @param closeTime Heure de fermeture (ex: "20:00")
+ * @param closeTime Heure de fermeture (ex: "22:00")
  */
 export function calculateNextSaleDates(
   day: SaleDay,
   fromDate: Date = new Date(),
   openTime: string = '10:00',
-  closeTime: string = '20:00'
+  closeTime: string = '22:00'
 ): { startsAt: Date; endsAt: Date } {
   const targetDayOfWeek = day === 'MARDI' ? 2 : 5; // 2 = Mardi, 5 = Vendredi
   const currentDayOfWeek = fromDate.getDay(); // 0 = Dimanche, 1 = Lundi, 2 = Mardi...
@@ -45,7 +45,7 @@ export function calculateNextSaleDates(
   const [closeHour, closeMin] = closeTime.split(':').map(Number);
   const candidateEnd = new Date(fromDate);
   candidateEnd.setDate(fromDate.getDate() + daysUntil);
-  candidateEnd.setHours(closeHour || 20, closeMin || 0, 0, 0);
+  candidateEnd.setHours(closeHour || 22, closeMin || 0, 0, 0);
 
   // Si le jour cible est aujourd'hui mais que l'heure de fin est déjà passée, reporter à la semaine suivante
   if (daysUntil === 0 && candidateEnd.getTime() <= fromDate.getTime()) {
@@ -60,7 +60,7 @@ export function calculateNextSaleDates(
 
   const endsAt = new Date(fromDate);
   endsAt.setDate(fromDate.getDate() + daysUntil);
-  endsAt.setHours(closeHour || 20, closeMin || 0, 0, 0);
+  endsAt.setHours(closeHour || 22, closeMin || 0, 0, 0);
 
   return { startsAt, endsAt };
 }

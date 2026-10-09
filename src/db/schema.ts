@@ -49,7 +49,7 @@ export const sales = pgTable('sales', {
   startsAt: timestamp('starts_at').notNull(),
   endsAt: timestamp('ends_at').notNull(),
   openTime: text('open_time').default('10:00'), // Heure d'ouverture configurable (ex: 10:00)
-  closeTime: text('close_time').default('20:00'), // Heure de clôture configurable (ex: 20:00)
+  closeTime: text('close_time').default('22:00'), // Heure de clôture par défaut (22:00)
   antiSnipeMinutes: integer('anti_snipe_minutes').notNull().default(2),
   antiSnipeTriggerSeconds: integer('anti_snipe_trigger_seconds').notNull().default(120),
   createdAt: timestamp('created_at').defaultNow(),

@@ -1550,7 +1550,7 @@ app.post('/api/admin/sales', requireAuth, requireAdmin, async (req: AuthRequest,
 
     const day = (saleDay === 'VENDREDI' ? 'VENDREDI' : 'MARDI') as 'MARDI' | 'VENDREDI';
     const oTime = openTime || '10:00';
-    const cTime = closeTime || '20:00';
+    const cTime = closeTime || '22:00';
 
     let sAt: Date;
     let eAt: Date;

@@ -16,15 +16,15 @@ export function getNextStandardLotSchedule(refDate: Date = new Date()): { starts
   const d = new Date(refDate);
   const day = d.getDay(); // 0: Dimanche, 1: Lundi, 2: Mardi, 3: Mercredi, 4: Jeudi, 5: Vendredi, 6: Samedi
   
-  // Si avant mardi soir -> Vente du Mardi
-  // Si entre mardi soir et vendredi soir -> Vente du Vendredi
-  // Si après vendredi soir -> Vente du Mardi suivant
+  // Si avant mardi soir 22h -> Vente du Mardi
+  // Si entre mardi 22h et vendredi 22h -> Vente du Vendredi
+  // Si après vendredi 22h -> Vente du Mardi suivant
   let targetDay: 'MARDI' | 'VENDREDI' = 'MARDI';
-  if (day === 2 && d.getHours() >= 20) {
+  if (day === 2 && d.getHours() >= 22) {
     targetDay = 'VENDREDI';
   } else if (day === 3 || day === 4) {
     targetDay = 'VENDREDI';
-  } else if (day === 5 && d.getHours() >= 20) {
+  } else if (day === 5 && d.getHours() >= 22) {
     targetDay = 'MARDI';
   } else if (day === 5) {
     targetDay = 'VENDREDI';

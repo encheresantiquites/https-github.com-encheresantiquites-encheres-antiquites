@@ -552,11 +552,11 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
 
                       {/* COMPTE À REBOURS OFFICIEL (Section 15) */}
                       <div className="bg-[#1C2541] rounded-xl p-3 border border-[#D4AF37]/30">
-                        <div className="flex items-center justify-between text-xs mb-1.5">
-                          <span className="text-slate-300 font-medium">Clôture des offres dans :</span>
-                          <span className="font-mono text-amber-300 font-bold">Session Live</span>
-                        </div>
-                        <LiveCountdown targetDate={salesSchedule.currentSale.endsAt} />
+                        <LiveCountdown
+                          startDate={salesSchedule.currentSale.startsAt}
+                          targetDate={salesSchedule.currentSale.endsAt}
+                          closeTimeLabel="22h00"
+                        />
                       </div>
 
                       <button
@@ -571,6 +571,31 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                         <span>Consulter le catalogue & Porter des offres</span>
                       </button>
                     </div>
+                  ) : salesSchedule?.nextSale ? (
+                    <div className="space-y-3">
+                      <div>
+                        <span className="text-xs font-mono font-bold text-amber-300 block">
+                          {salesSchedule.nextSale.saleDay === 'VENDREDI' ? 'VENTE DU VENDREDI' : 'VENTE DU MARDI'}
+                        </span>
+                        <h3 className="font-serif font-bold text-base text-slate-100">
+                          {salesSchedule.nextSale.title}
+                        </h3>
+                        <div className="flex items-center gap-2 text-xs text-slate-400 mt-0.5">
+                          <span>Horaires : {formatSaleHours(salesSchedule.nextSale.startsAt, salesSchedule.nextSale.endsAt)}</span>
+                          <span>•</span>
+                          <span className="text-amber-300 font-semibold">{salesSchedule.nextSale.totalLots || 0} lots au catalogue</span>
+                        </div>
+                      </div>
+
+                      {/* COMPTE À REBOURS OFFICIEL (Section 15) */}
+                      <div className="bg-[#1C2541] rounded-xl p-3 border border-[#D4AF37]/30">
+                        <LiveCountdown
+                          startDate={salesSchedule.nextSale.startsAt}
+                          targetDate={salesSchedule.nextSale.endsAt}
+                          closeTimeLabel="22h00"
+                        />
+                      </div>
+                    </div>
                   ) : (
                     <div className="py-6 text-center space-y-2">
                       <Clock className="w-8 h-8 text-slate-600 mx-auto" />
@@ -578,7 +603,7 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                         Aucune vente privée n'est en direct à cet instant.
                       </p>
                       <p className="text-[11px] text-slate-400">
-                        Consultez la prochaine session programmée ci-contre.
+                        Consultez la prochaine session programmée ci-contre (10h00 → 22h00).
                       </p>
                     </div>
                   )}
