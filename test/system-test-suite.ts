@@ -148,7 +148,7 @@ export async function runFullTestSuite() {
     await db.delete(sales).where(inArray(sales.reference, ['VENTE-TEST-MARDI', 'VENTE-TEST-VENDREDI']));
 
     // C. Créer les deux ventes : VENTE DU MARDI et VENTE DU VENDREDI
-    // Mardi : 10h00 - 20h00
+    // Mardi : 10h00 - 22h00
     // On prend le mardi et vendredi suivants ou des dates calibrées
     const tuesdayDate = new Date();
     // Régler pour un prochain mardi à 10h
@@ -156,14 +156,14 @@ export async function runFullTestSuite() {
     const tueStartsAt = new Date(tuesdayDate);
     tueStartsAt.setHours(10, 0, 0, 0);
     const tueEndsAt = new Date(tuesdayDate);
-    tueEndsAt.setHours(20, 0, 0, 0);
+    tueEndsAt.setHours(22, 0, 0, 0);
 
     const fridayDate = new Date();
     fridayDate.setDate(fridayDate.getDate() + ((5 + 7 - fridayDate.getDay()) % 7 || 7));
     const friStartsAt = new Date(fridayDate);
     friStartsAt.setHours(10, 0, 0, 0);
     const friEndsAt = new Date(fridayDate);
-    friEndsAt.setHours(20, 0, 0, 0);
+    friEndsAt.setHours(22, 0, 0, 0);
 
     const [venteMardi] = await db.insert(sales).values({
       reference: 'VENTE-TEST-MARDI',
@@ -174,7 +174,7 @@ export async function runFullTestSuite() {
       startsAt: tueStartsAt,
       endsAt: tueEndsAt,
       openTime: '10:00',
-      closeTime: '20:00',
+      closeTime: '22:00',
       antiSnipeMinutes: 2,
     }).returning();
 
@@ -187,7 +187,7 @@ export async function runFullTestSuite() {
       startsAt: friStartsAt,
       endsAt: friEndsAt,
       openTime: '10:00',
-      closeTime: '20:00',
+      closeTime: '22:00',
       antiSnipeMinutes: 2,
     }).returning();
 
@@ -272,9 +272,9 @@ export async function runFullTestSuite() {
       t1Details.push(`ÉCHEC : Vente du jeudi non rejetée (statut ${badDayThu.status})`);
     }
 
-    // 3. Vérifier enregistrement des horaires (10h00 - 20h00)
-    if (venteMardi.openTime === '10:00' && venteMardi.closeTime === '20:00') {
-      t1Details.push('Horaires d’ouverture (10h00) et clôture (20h00) enregistrés avec exactitude');
+    // 3. Vérifier enregistrement des horaires (10h00 - 22h00)
+    if (venteMardi.openTime === '10:00' && venteMardi.closeTime === '22:00') {
+      t1Details.push('Horaires d’ouverture (10h00) et clôture (22h00) enregistrés avec exactitude');
     } else {
       t1Pass = false;
       t1Details.push('Horaires incorrects pour la vente du mardi');
@@ -312,7 +312,7 @@ export async function runFullTestSuite() {
       startsAt: tueStartsAt,
       endsAt: tueEndsAt,
       openTime: '10:00',
-      closeTime: '20:00',
+      closeTime: '22:00',
     }).returning();
 
     // Vérifier que le brouillon n'apparaît pas dans les ventes ouvertes publiques pour les pros
@@ -543,7 +543,7 @@ export async function runFullTestSuite() {
     let t5Details: string[] = [];
 
     // Clôturer la vente du mardi via l'administration
-    // Mise à jour de endsAt dans le passé pour simuler l'expiration de la séance à 20h00
+    // Mise à jour de endsAt dans le passé pour simuler l'expiration de la séance à 22h00
     const nowPast = new Date(Date.now() - 10000);
     await db.update(sales).set({ endsAt: nowPast, status: 'LIVE' }).where(eq(sales.id, venteMardi.id));
     await db.update(lots).set({ endsAt: nowPast }).where(eq(lots.saleId, venteMardi.id));
@@ -875,7 +875,7 @@ export async function runFullTestSuite() {
     if (adminDashRes.ok) {
       const data = adminDashRes.data;
       if (data.nextSale || data.currentSale) {
-        t11Details.push('PROCHAINE VENTE : jour, date, horaires (10h-20h), statut et nombre de lots retournés');
+        t11Details.push('PROCHAINE VENTE : jour, date, horaires (10h-22h), statut et nombre de lots retournés');
       } else {
         t11Pass = false;
         t11Details.push('Prochaine vente absente du dashboard');
@@ -955,7 +955,7 @@ export async function runFullTestSuite() {
       startsAt: new Date(Date.now() - 10000),
       endsAt: shortSaleEndsAt,
       openTime: '10:00',
-      closeTime: '20:00',
+      closeTime: '22:00',
     }).returning();
 
     const [shortLot] = await db.insert(lots).values({
@@ -1098,7 +1098,7 @@ export async function runFullTestSuite() {
       startsAt: new Date(Date.now() - 5000),
       endsAt: new Date(Date.now() - 1000),
       openTime: '10:00',
-      closeTime: '20:00',
+      closeTime: '22:00',
     }).returning();
 
     await updateSalesStatusesAndClosures();

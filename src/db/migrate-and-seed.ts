@@ -207,6 +207,9 @@ const DDL_STATEMENTS = [
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS shipping_carrier TEXT;`,
   `ALTER TABLE orders ADD COLUMN IF NOT EXISTS tracking_number TEXT;`,
   `ALTER TABLE transaction_documents ADD COLUMN IF NOT EXISTS shipping_cents INTEGER DEFAULT 0;`,
+  `ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_day TEXT DEFAULT 'MARDI';`,
+  `ALTER TABLE sales ADD COLUMN IF NOT EXISTS open_time TEXT DEFAULT '10:00';`,
+  `ALTER TABLE sales ADD COLUMN IF NOT EXISTS close_time TEXT DEFAULT '22:00';`,
 ];
 
 /**
@@ -278,6 +281,49 @@ export async function autoMigrateAndSeed(): Promise<boolean> {
       testUserId = userInsert.rows[0].id;
     } else {
       testUserId = userCheck.rows[0].id;
+    }
+
+    // 2b. Initialiser le compte Administrateur initial (Monsieur De Coster)
+    const adminCheck = await client.query(`SELECT id FROM users WHERE uid = '14011981' OR email = 'admin@encheres-antiquites.fr' LIMIT 1`);
+    if (adminCheck.rows.length === 0) {
+      await client.query(
+        `INSERT INTO users (
+          uid, email, role, status, email_verified, password_hash,
+          first_name, last_name, phone, company_name, activity,
+          country, address_line1, postal_code, city, accepted_terms, accepted_terms_version
+        ) VALUES (
+          $1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17
+        )`,
+        [
+          '14011981',
+          'admin@encheres-antiquites.fr',
+          'ADMIN',
+          'APPROVED',
+          true,
+          'b74b7e3fcb623d805dacf98db27530f845760c47e3b0faa702b84e9ff3902c37', // SHA-256 de '3030'
+          'Monsieur',
+          'De Coster',
+          '14011981',
+          'Galerie & Cabinet De Coster',
+          'Vendeur Particulier & Administrateur',
+          'France',
+          '14 rue des Antiquaires',
+          '59000',
+          'Lille',
+          true,
+          'v1.0 (2026)',
+        ]
+      );
+    } else {
+      // S'assurer que le compte possède bien le rôle ADMIN et le hash correct
+      await client.query(
+        `UPDATE users SET
+          role = 'ADMIN',
+          status = 'APPROVED',
+          password_hash = 'b74b7e3fcb623d805dacf98db27530f845760c47e3b0faa702b84e9ff3902c37'
+        WHERE id = $1`,
+        [adminCheck.rows[0].id]
+      );
     }
 
     // 3. Initialiser le catalogue des 12 lots si la table est vide

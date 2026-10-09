@@ -74,7 +74,7 @@ export async function runRevalidationSuite() {
     startsAt: new Date(Date.now() - 3600000),
     endsAt: new Date(Date.now() + 3600000),
     openTime: '10:00',
-    closeTime: '20:00',
+    closeTime: '22:00',
     antiSnipeMinutes: 2,
   }).returning();
 

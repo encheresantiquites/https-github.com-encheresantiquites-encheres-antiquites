@@ -91,21 +91,21 @@ export async function placeProxyBid(
       return { success: false, message: 'La vente pour cet objet est clôturée.' };
     }
 
-    // Vérifier également le statut de la vente si le lot y est rattaché
+    // Vérifier également le statut et les horaires de la vente si le lot y est rattaché
     if (lot.saleId) {
       const saleRes = await tx.select().from(sales).where(eq(sales.id, lot.saleId)).limit(1);
       if (saleRes.length > 0) {
         const sale = saleRes[0];
-        if (sale.status !== 'LIVE') {
+        if (sale.status !== 'LIVE' || sale.startsAt.getTime() > now.getTime()) {
           return {
             success: false,
-            message: ['SCHEDULED', 'DRAFT'].includes(sale.status)
-              ? 'La vente n’est pas encore ouverte aux enchères.'
+            message: (['SCHEDULED', 'DRAFT'].includes(sale.status) || sale.startsAt.getTime() > now.getTime())
+              ? 'La vente n’est pas encore ouverte aux enchères (ouverture à 10h00).'
               : 'La vente pour cet objet est clôturée.',
           };
         }
         if (sale.endsAt.getTime() <= now.getTime()) {
-          return { success: false, message: 'La vente pour cet objet est clôturée.' };
+          return { success: false, message: 'La vente pour cet objet est clôturée (clôture à 22h00).' };
         }
       }
     }

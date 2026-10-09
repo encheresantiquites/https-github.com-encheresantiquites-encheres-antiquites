@@ -10,6 +10,7 @@ interface AuthContextType {
   loading: boolean;
   loginWithGoogle: () => Promise<void>;
   loginWithCredentials: (email: string, password: string) => Promise<any>;
+  loginAdmin: (identifier: string, password: string) => Promise<any>;
   logout: () => Promise<void>;
   refreshUser: () => Promise<void>;
   switchSimulatedUser: (email: string) => Promise<void>;
@@ -152,6 +153,37 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
     }
   };
 
+  const loginAdmin = async (identifier: string, password: string) => {
+    try {
+      setLoading(true);
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ identifier: identifier.trim(), password }),
+      });
+
+      const data = await res.json();
+      if (!res.ok) {
+        throw new Error(data.error || 'Identifiant ou mot de passe administrateur incorrect.');
+      }
+
+      setToken(data.token);
+      setUser(data.user);
+      setIsSimulated(true);
+      try {
+        localStorage.setItem('enchere_auth_token', data.token);
+        localStorage.setItem('enchere_auth_user', JSON.stringify(data.user));
+        localStorage.setItem('enchere_current_tab', 'admin');
+      } catch {}
+      return data.user;
+    } catch (err: any) {
+      console.error('Erreur login admin:', err);
+      throw err;
+    } finally {
+      setLoading(false);
+    }
+  };
+
   const logout = async () => {
     try {
       await signOut(auth);
@@ -222,6 +254,7 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         loading,
         loginWithGoogle,
         loginWithCredentials,
+        loginAdmin,
         logout,
         refreshUser,
         switchSimulatedUser,

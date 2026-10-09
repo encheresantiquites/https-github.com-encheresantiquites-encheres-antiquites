@@ -11,6 +11,7 @@ import { HowItWorksModal } from './components/HowItWorksModal.tsx';
 import { RegistrationModal } from './components/RegistrationModal.tsx';
 import { CustomerSpace } from './components/CustomerSpace.tsx';
 import { AdminBackoffice } from './components/AdminBackoffice.tsx';
+import { AdminLogin } from './components/AdminLogin.tsx';
 import { LoginModal } from './components/LoginModal.tsx';
 import { LiveChatWidget } from './components/LiveChatWidget.tsx';
 import { PWAInstallBanner } from './components/PWAInstallBanner.tsx';
@@ -46,6 +47,10 @@ function AppContent() {
   const [salesSchedule, setSalesSchedule] = useState<any>(null);
   const [currentTab, setCurrentTab] = useState<'home' | 'customer' | 'admin'>(() => {
     try {
+      const pathname = window.location.pathname;
+      if (pathname.startsWith('/admin')) {
+        return 'admin';
+      }
       const urlParams = new URLSearchParams(window.location.search);
       const tabParam = urlParams.get('tab');
       if (tabParam === 'customer' || tabParam === 'admin' || tabParam === 'home') {
@@ -59,18 +64,53 @@ function AppContent() {
     return 'home';
   });
 
+  // Écouteur de navigation historique (retour/avant dans le navigateur)
+  useEffect(() => {
+    const handlePopState = () => {
+      try {
+        const pathname = window.location.pathname;
+        if (pathname.startsWith('/admin')) {
+          setCurrentTab('admin');
+          return;
+        }
+        const urlParams = new URLSearchParams(window.location.search);
+        const tab = urlParams.get('tab');
+        if (tab === 'customer' || tab === 'admin') {
+          setCurrentTab(tab as any);
+        } else {
+          setCurrentTab('home');
+        }
+      } catch {}
+    };
+
+    window.addEventListener('popstate', handlePopState);
+    return () => window.removeEventListener('popstate', handlePopState);
+  }, []);
+
+  // Synchronisation bidirectionnelle de l'URL et du localStorage
   useEffect(() => {
     try {
       localStorage.setItem('enchere_current_tab', currentTab);
-      const url = new URL(window.location.href);
-      if (currentTab !== 'home') {
-        url.searchParams.set('tab', currentTab);
+      if (currentTab === 'admin') {
+        const targetPath = user?.role === 'ADMIN' ? '/admin' : '/admin/login';
+        if (window.location.pathname !== targetPath && !window.location.pathname.startsWith('/admin')) {
+          window.history.pushState({}, '', targetPath);
+        }
       } else {
-        url.searchParams.delete('tab');
+        if (window.location.pathname.startsWith('/admin')) {
+          window.history.pushState({}, '', currentTab === 'customer' ? '/?tab=customer' : '/');
+        } else {
+          const url = new URL(window.location.href);
+          if (currentTab !== 'home') {
+            url.searchParams.set('tab', currentTab);
+          } else {
+            url.searchParams.delete('tab');
+          }
+          window.history.replaceState({}, '', url.toString());
+        }
       }
-      window.history.replaceState({}, '', url.toString());
     } catch {}
-  }, [currentTab]);
+  }, [currentTab, user?.role]);
   const [lots, setLots] = useState<Lot[]>(() => getFilteredDefaultLots('current'));
   const [selectedLot, setSelectedLot] = useState<Lot | null>(null);
   const [howItWorksOpen, setHowItWorksOpen] = useState(false);
@@ -196,21 +236,23 @@ function AppContent() {
 
       {currentTab === 'admin' && (
         user?.role === 'ADMIN' ? (
-          <AdminBackoffice onBack={() => setCurrentTab('home')} />
+          <AdminBackoffice
+            onBack={() => {
+              window.history.pushState({}, '', '/');
+              setCurrentTab('home');
+            }}
+          />
         ) : (
-          <div className="max-w-md mx-auto my-20 p-8 bg-[#1C2541] rounded-2xl border border-rose-500/40 text-center">
-            <h2 className="text-xl font-serif font-bold text-rose-300 mb-2">Accès restreint</h2>
-            <p className="text-xs text-slate-300 mb-4">
-              Cet espace est strictement réservé à l'administrateur vendeur de la plateforme.
-            </p>
-            <button
-              onClick={() => setCurrentTab('home')}
-              className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 px-4 py-2 rounded-lg text-xs font-bold transition-colors inline-flex items-center gap-1.5"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>← Retour aux enchères</span>
-            </button>
-          </div>
+          <AdminLogin
+            onSuccess={() => {
+              window.history.pushState({}, '', '/admin');
+              setCurrentTab('admin');
+            }}
+            onBack={() => {
+              window.history.pushState({}, '', '/');
+              setCurrentTab('home');
+            }}
+          />
         )
       )}
 
@@ -539,12 +581,27 @@ function AppContent() {
             <div>
               © 2026 Enchères-Antiquités • Monsieur De Coster — Tous droits réservés. Cession entre particulier et professionnels.
             </div>
-            <div className="flex gap-4">
+            <div className="flex flex-wrap items-center gap-3 sm:gap-4">
               <button onClick={() => setHowItWorksOpen(true)} className="hover:text-slate-300">
                 Comment ça marche
               </button>
               <span>•</span>
               <span className="text-slate-500">Conditions de participation v1.0</span>
+              <span>•</span>
+              <a
+                href="/admin/login"
+                onClick={(e) => {
+                  e.preventDefault();
+                  window.history.pushState({}, '', '/admin/login');
+                  setCurrentTab('admin');
+                  window.scrollTo({ top: 0, behavior: 'smooth' });
+                }}
+                className="text-[#D4AF37] hover:text-[#E5C158] font-medium flex items-center gap-1.5 transition-colors cursor-pointer"
+                title="Accès réservé à l'administrateur vendeur"
+              >
+                <ShieldCheck className="w-3.5 h-3.5 text-[#D4AF37]" />
+                <span>Administration</span>
+              </a>
             </div>
           </div>
         </div>

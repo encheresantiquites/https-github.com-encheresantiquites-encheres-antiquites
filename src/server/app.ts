@@ -199,6 +199,154 @@ const hashPassword = (password: string) => {
   return crypto.createHash('sha256').update(password).digest('hex');
 };
 
+// Suivi des tentatives de connexion administrateur pour parer aux attaques par force brute
+const adminLoginAttempts = new Map<string, { count: number; lastAttempt: number }>();
+
+// Connexion sécurisée administrateur
+app.post('/api/admin/login', async (req, res) => {
+  try {
+    const { identifier, password } = req.body;
+    const clientIp = req.ip || req.socket.remoteAddress || 'unknown';
+
+    // Protection contre les soumissions répétées (force brute) : max 5 échecs consécutifs
+    const now = Date.now();
+    const attempts = adminLoginAttempts.get(clientIp) || { count: 0, lastAttempt: now };
+    if (attempts.count >= 5 && now - attempts.lastAttempt < 60000) {
+      const waitSeconds = Math.ceil((60000 - (now - attempts.lastAttempt)) / 1000);
+      return res.status(429).json({
+        error: `Trop de tentatives consécutives. Par mesure de sécurité, veuillez patienter ${waitSeconds} secondes avant de réessayer.`,
+      });
+    }
+
+    if (!identifier || !password) {
+      return res.status(400).json({ error: 'Veuillez saisir votre identifiant et votre mot de passe administrateur.' });
+    }
+
+    const cleanId = String(identifier).trim();
+    const hashed = hashPassword(String(password).trim());
+
+    // 1. Recherche de l'administrateur en base
+    let adminUser: any = null;
+    try {
+      const dbUsers = await withDbRetry(() =>
+        db
+          .select()
+          .from(users)
+          .where(
+            or(
+              eq(users.uid, cleanId),
+              eq(users.email, cleanId.toLowerCase()),
+              eq(users.phone, cleanId)
+            )
+          )
+      );
+
+      if (dbUsers.length > 0 && dbUsers[0].role === 'ADMIN') {
+        adminUser = dbUsers[0];
+      }
+    } catch (dbErr) {
+      console.warn('DB lookup error during admin login:', dbErr);
+    }
+
+    // 2. Vérification des identifiants initiaux souhaités (14011981 / 3030)
+    const isTargetAdminCredentials =
+      (cleanId === '14011981' || cleanId.toLowerCase() === 'admin@encheres-antiquites.fr') &&
+      hashed === 'b74b7e3fcb623d805dacf98db27530f845760c47e3b0faa702b84e9ff3902c37';
+
+    if (!adminUser && isTargetAdminCredentials) {
+      try {
+        const created = await withDbRetry(() =>
+          db
+            .insert(users)
+            .values({
+              uid: '14011981',
+              email: 'admin@encheres-antiquites.fr',
+              role: 'ADMIN',
+              status: 'APPROVED',
+              emailVerified: true,
+              passwordHash: hashed,
+              firstName: 'Monsieur',
+              lastName: 'De Coster',
+              companyName: 'Cabinet & Galerie De Coster',
+              activity: 'Antiquaire Vendeur & Administrateur',
+              phone: '14011981',
+              addressLine1: '14 rue des Antiquaires',
+              postalCode: '59000',
+              city: 'Lille',
+              country: 'France',
+              acceptedTerms: true,
+              acceptedTermsVersion: 'v1.0 (2026)',
+            })
+            .onConflictDoUpdate({
+              target: users.uid,
+              set: {
+                role: 'ADMIN',
+                status: 'APPROVED',
+                passwordHash: hashed,
+                updatedAt: new Date(),
+              },
+            })
+            .returning()
+        );
+        adminUser = created[0];
+      } catch (insertErr) {
+        console.warn('Fallback admin creation in DB:', insertErr);
+        adminUser = {
+          id: 1,
+          uid: '14011981',
+          email: 'admin@encheres-antiquites.fr',
+          role: 'ADMIN',
+          status: 'APPROVED',
+          firstName: 'Monsieur',
+          lastName: 'De Coster',
+          companyName: 'Cabinet & Galerie De Coster',
+        };
+      }
+    }
+
+    if (!adminUser) {
+      attempts.count += 1;
+      attempts.lastAttempt = now;
+      adminLoginAttempts.set(clientIp, attempts);
+      return res.status(401).json({ error: 'Identifiant ou mot de passe administrateur incorrect.' });
+    }
+
+    // Vérification du mot de passe
+    if (adminUser.passwordHash && adminUser.passwordHash !== hashed) {
+      attempts.count += 1;
+      attempts.lastAttempt = now;
+      adminLoginAttempts.set(clientIp, attempts);
+      return res.status(401).json({ error: 'Identifiant ou mot de passe administrateur incorrect.' });
+    }
+
+    // Réinitialisation des tentatives après succès
+    adminLoginAttempts.delete(clientIp);
+
+    // Enregistrement d'audit de sécurité
+    try {
+      await db.insert(auditLogs).values({
+        userId: adminUser.id,
+        userEmail: adminUser.email,
+        action: 'ADMIN_LOGIN_SUCCESS',
+        entityType: 'AUTH',
+        entityId: String(adminUser.id),
+        details: `Connexion sécurisée de l'administrateur (${cleanId})`,
+      });
+    } catch {}
+
+    const token = `TOKEN_${Buffer.from(adminUser.email).toString('base64')}`;
+
+    res.json({
+      success: true,
+      token,
+      user: adminUser,
+    });
+  } catch (err: any) {
+    console.error('Error in /api/admin/login:', err);
+    res.status(500).json({ error: 'Une erreur serveur est survenue lors de l’authentification.' });
+  }
+});
+
 // Connexion login / mot de passe pour les professionnels
 app.post('/api/login', async (req, res) => {
   try {
@@ -1258,6 +1406,35 @@ app.post('/api/orders/:id/simulate-payment', requireAuth, async (req: AuthReques
       paymentDate: now,
     });
 
+    // Générer le reçu légal de transaction si non existant
+    const existingDoc = await db.select().from(transactionDocuments).where(eq(transactionDocuments.orderId, orderId)).limit(1);
+    if (existingDoc.length === 0 && lot) {
+      const buyerUserRes = await db.select().from(users).where(eq(users.id, order.buyerId)).limit(1);
+      const buyerUser = buyerUserRes[0];
+      const buyerName = buyerUser ? (`${buyerUser.firstName || ''} ${buyerUser.lastName || ''}`.trim() || buyerUser.companyName || buyerUser.email) : 'Acquéreur';
+      const buyerAddress = buyerUser ? (`${buyerUser.addressLine1 || ''} ${buyerUser.postalCode || ''} ${buyerUser.city || ''} ${buyerUser.country || 'France'}`.trim() || 'Adresse professionnelle') : 'Adresse professionnelle';
+      const docNum = `REC-${now.getFullYear()}-${String(orderId).padStart(4, '0')}`;
+
+      await db.insert(transactionDocuments).values({
+        documentNumber: docNum,
+        orderId,
+        docType: 'TRANSACTION_CONFIRMATION',
+        sellerName: 'Monsieur De Coster',
+        sellerStatus: 'Vendeur particulier',
+        buyerName,
+        buyerCompany: buyerUser?.companyName,
+        buyerAddress,
+        lotReference: lot.reference,
+        lotTitle: lot.title,
+        amountCents: order.finalPriceCents,
+        shippingCents: order.shippingCostCents,
+        totalCents: order.totalCents,
+        paymentMethod: 'Simulation (Validé)',
+        paymentReference: `SIM-${order.orderNumber}`,
+        paidAt: now,
+      });
+    }
+
     await db.insert(auditLogs).values({
       userId,
       action: 'PAYMENT_SIMULATED',
@@ -1890,8 +2067,10 @@ app.post('/api/admin/lots', requireAuth, requireAdmin, async (req: AuthRequest, 
       startingPriceCents,
       reservePriceCents,
       targetAcquisitionCostCents,
+      actualAcquisitionCostCents,
       endsAt,
       images,
+      status,
     } = req.body;
 
     const standardSchedule = getNextStandardLotSchedule();
@@ -1915,9 +2094,10 @@ app.post('/api/admin/lots', requireAuth, requireAdmin, async (req: AuthRequest, 
         reservePriceCents: reservePriceCents || 0,
         currentPriceCents: startingPriceCents,
         targetAcquisitionCostCents: targetAcquisitionCostCents || 0,
+        actualAcquisitionCostCents: actualAcquisitionCostCents || targetAcquisitionCostCents || 0,
         endsAt: finalEndsAt,
         images: images || [],
-        status: 'ACTIVE',
+        status: status || 'ACTIVE',
       })
       .returning();
 
@@ -1930,6 +2110,343 @@ app.post('/api/admin/lots', requireAuth, requireAdmin, async (req: AuthRequest, 
     });
 
     res.json({ lot: newLot[0] });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Modification d'un lot existant par l'administrateur
+app.put('/api/admin/lots/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const lotId = parseInt(req.params.id);
+    const {
+      title,
+      description,
+      category,
+      period,
+      dimensions,
+      weight,
+      conditionReport,
+      flaws,
+      observations,
+      startingPriceCents,
+      reservePriceCents,
+      targetAcquisitionCostCents,
+      actualAcquisitionCostCents,
+      acquisitionStatus,
+      acquisitionSource,
+      acquisitionNotes,
+      shippingQuoteRequired,
+      customShippingCostCents,
+      images,
+      status,
+      saleId,
+    } = req.body;
+
+    const existingRes = await db.select().from(lots).where(eq(lots.id, lotId)).limit(1);
+    if (existingRes.length === 0) return res.status(404).json({ error: 'Lot introuvable.' });
+    const existing = existingRes[0];
+
+    const updateData: any = { updatedAt: new Date() };
+    if (title !== undefined) updateData.title = title;
+    if (description !== undefined) updateData.description = description;
+    if (category !== undefined) updateData.category = category;
+    if (period !== undefined) updateData.period = period;
+    if (dimensions !== undefined) updateData.dimensions = dimensions;
+    if (weight !== undefined) updateData.weight = weight;
+    if (conditionReport !== undefined) updateData.conditionReport = conditionReport;
+    if (flaws !== undefined) updateData.flaws = flaws;
+    if (observations !== undefined) updateData.observations = observations;
+    if (startingPriceCents !== undefined) {
+      updateData.startingPriceCents = startingPriceCents;
+      if (existing.bidCount === 0) {
+        updateData.currentPriceCents = startingPriceCents;
+      }
+    }
+    if (reservePriceCents !== undefined) updateData.reservePriceCents = reservePriceCents;
+    if (targetAcquisitionCostCents !== undefined) updateData.targetAcquisitionCostCents = targetAcquisitionCostCents;
+    if (actualAcquisitionCostCents !== undefined) updateData.actualAcquisitionCostCents = actualAcquisitionCostCents;
+    if (acquisitionStatus !== undefined) updateData.acquisitionStatus = acquisitionStatus;
+    if (acquisitionSource !== undefined) updateData.acquisitionSource = acquisitionSource;
+    if (acquisitionNotes !== undefined) updateData.acquisitionNotes = acquisitionNotes;
+    if (shippingQuoteRequired !== undefined) updateData.shippingQuoteRequired = shippingQuoteRequired;
+    if (customShippingCostCents !== undefined) updateData.customShippingCostCents = customShippingCostCents;
+    if (images !== undefined) updateData.images = images;
+    if (status !== undefined) updateData.status = status;
+    if (saleId !== undefined) updateData.saleId = saleId === null ? null : parseInt(saleId);
+
+    const updated = await db.update(lots).set(updateData).where(eq(lots.id, lotId)).returning();
+
+    await db.insert(auditLogs).values({
+      userId: req.dbUser!.id,
+      userEmail: req.dbUser!.email,
+      action: 'UPDATE_LOT',
+      entityType: 'LOT',
+      entityId: existing.reference,
+      details: `Mise à jour du lot ${existing.reference} ("${updated[0].title}")`,
+    });
+
+    res.json({ lot: updated[0] });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Suppression d'un lot (sans offre ou hors vente)
+app.delete('/api/admin/lots/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const lotId = parseInt(req.params.id);
+    const existingRes = await db.select().from(lots).where(eq(lots.id, lotId)).limit(1);
+    if (existingRes.length === 0) return res.status(404).json({ error: 'Lot introuvable.' });
+    const lot = existingRes[0];
+
+    if (lot.bidCount > 0 || lot.status === 'SOLD') {
+      return res.status(400).json({
+        error: 'Impossible de supprimer un objet ayant reçu des offres ou déjà adjugé. Vous pouvez modifier son statut en DRAFT ou CANCELLED.',
+      });
+    }
+
+    await db.delete(lots).where(eq(lots.id, lotId));
+
+    await db.insert(auditLogs).values({
+      userId: req.dbUser!.id,
+      userEmail: req.dbUser!.email,
+      action: 'DELETE_LOT',
+      entityType: 'LOT',
+      entityId: lot.reference,
+      details: `Suppression du lot ${lot.reference}: "${lot.title}"`,
+    });
+
+    res.json({ success: true, message: `Lot ${lot.reference} supprimé avec succès.` });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Commandes et adjudications (Vue complète des ordres avec statut de règlement sous 24h)
+app.get('/api/admin/orders', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const allOrders = await db
+      .select({
+        order: orders,
+        lot: lots,
+        buyer: {
+          id: users.id,
+          email: users.email,
+          firstName: users.firstName,
+          lastName: users.lastName,
+          companyName: users.companyName,
+          phone: users.phone,
+          addressLine1: users.addressLine1,
+          postalCode: users.postalCode,
+          city: users.city,
+          country: users.country,
+          vatNumber: users.vatNumber,
+          status: users.status,
+        },
+      })
+      .from(orders)
+      .innerJoin(lots, eq(orders.lotId, lots.id))
+      .innerJoin(users, eq(orders.buyerId, users.id))
+      .orderBy(desc(orders.id));
+
+    // Récupérer les bordereaux de transaction associés
+    const docs = await db.select().from(transactionDocuments);
+    const docMap = new Map<number, any>();
+    for (const d of docs) {
+      docMap.set(d.orderId, d);
+    }
+
+    const enriched = allOrders.map((item) => ({
+      ...item.order,
+      lot: item.lot,
+      buyer: item.buyer,
+      document: docMap.get(item.order.id) || null,
+    }));
+
+    res.json({ orders: enriched });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Validation manuelle du règlement d'un bordereau par l'administrateur (Virement, Chèque, etc.)
+app.post('/api/admin/orders/:id/mark-paid', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const orderId = parseInt(req.params.id);
+    const { paymentMethod, paymentReference, notes } = req.body;
+    const now = new Date();
+
+    const orderRes = await db.select().from(orders).where(eq(orders.id, orderId)).limit(1);
+    if (orderRes.length === 0) return res.status(404).json({ error: 'Commande introuvable.' });
+    const order = orderRes[0];
+
+    const buyerRes = await db.select().from(users).where(eq(users.id, order.buyerId)).limit(1);
+    const buyer = buyerRes[0];
+
+    const lotRes = await db.select().from(lots).where(eq(lots.id, order.lotId)).limit(1);
+    const lot = lotRes[0];
+
+    await db.update(orders).set({
+      status: 'PAID',
+      notes: notes ? `${order.notes || ''} [Règlement validé: ${notes}]`.trim() : order.notes,
+      updatedAt: now,
+    }).where(eq(orders.id, orderId));
+
+    if (lot) {
+      await db.update(lots).set({
+        paymentStatus: 'PAID',
+        status: 'SOLD',
+        updatedAt: now,
+      }).where(eq(lots.id, lot.id));
+    }
+
+    await db.insert(payments).values({
+      orderId,
+      buyerId: order.buyerId,
+      amountCents: order.totalCents,
+      currency: 'EUR',
+      status: 'PAID',
+      provider: paymentMethod || 'VIREMENT_BANCAIRE',
+      paymentDate: now,
+    });
+
+    // Générer le bordereau / reçu légal
+    const existingDoc = await db.select().from(transactionDocuments).where(eq(transactionDocuments.orderId, orderId)).limit(1);
+    if (existingDoc.length === 0 && buyer && lot) {
+      const buyerName = `${buyer.firstName || ''} ${buyer.lastName || ''}`.trim() || buyer.companyName || buyer.email;
+      const buyerAddress = `${buyer.addressLine1 || ''} ${buyer.postalCode || ''} ${buyer.city || ''} ${buyer.country || 'France'}`.trim() || 'Adresse professionnelle';
+      const docNum = `BORD-${now.getFullYear()}-${String(orderId).padStart(4, '0')}`;
+
+      await db.insert(transactionDocuments).values({
+        documentNumber: docNum,
+        orderId,
+        docType: 'TRANSACTION_CONFIRMATION',
+        sellerName: 'Monsieur De Coster',
+        sellerStatus: 'Vendeur particulier',
+        buyerName,
+        buyerCompany: buyer.companyName,
+        buyerAddress,
+        lotReference: lot.reference,
+        lotTitle: lot.title,
+        amountCents: order.finalPriceCents,
+        shippingCents: order.shippingCostCents,
+        totalCents: order.totalCents,
+        paymentMethod: paymentMethod || 'Virement bancaire',
+        paymentReference: paymentReference || `Règlement direct validé le ${now.toLocaleDateString('fr-FR')}`,
+        paidAt: now,
+      });
+    }
+
+    await db.insert(auditLogs).values({
+      userId: req.dbUser!.id,
+      userEmail: req.dbUser!.email,
+      action: 'ADMIN_MARK_ORDER_PAID',
+      entityType: 'ORDER',
+      entityId: order.orderNumber,
+      details: `Validation manuelle du règlement (${paymentMethod || 'Virement'}) pour ${order.orderNumber} (${(order.totalCents / 100).toFixed(2)} €)`,
+    });
+
+    try {
+      realtimeHub.sendToUser(order.buyerId, 'order:paid', {
+        orderId,
+        orderNumber: order.orderNumber,
+        status: 'PAID',
+        message: `Votre règlement de ${(order.totalCents / 100).toFixed(2)} € pour la commande ${order.orderNumber} a été validé.`,
+      });
+    } catch {}
+
+    res.json({ success: true, message: 'Règlement validé et bordereau enregistré.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Livre de Police / Registre légal des objets mobiliers (Art. 321-7 Code pénal)
+app.get('/api/admin/police-register', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const allLots = await db
+      .select({
+        lot: lots,
+        sale: sales,
+        winner: users,
+      })
+      .from(lots)
+      .leftJoin(sales, eq(lots.saleId, sales.id))
+      .leftJoin(users, eq(lots.currentWinnerId, users.id))
+      .orderBy(asc(lots.id));
+
+    const ordersList = await db.select().from(orders);
+    const orderMap = new Map<number, any>();
+    for (const o of ordersList) {
+      orderMap.set(o.lotId, o);
+    }
+
+    const policeEntries = allLots.map((item, index) => {
+      const l = item.lot;
+      const s = item.sale;
+      const w = item.winner;
+      const ord = orderMap.get(l.id);
+
+      return {
+        orderIndex: index + 1,
+        lotId: l.id,
+        reference: l.reference,
+        entryDate: l.createdAt,
+        acquisitionDate: l.acquisitionDate || l.createdAt,
+        title: l.title,
+        category: l.category,
+        period: l.period,
+        dimensions: l.dimensions,
+        weight: l.weight,
+        description: `${l.title} — ${l.category}${l.period ? ` (${l.period})` : ''}. ${l.dimensions ? `Dim: ${l.dimensions}. ` : ''}${l.weight ? `Poids: ${l.weight}. ` : ''}${l.conditionReport || ''}`,
+        conditionReport: l.conditionReport,
+        flaws: l.flaws,
+        source: l.acquisitionSource || 'Collection particulière / Succession familiale',
+        targetCostCents: l.targetAcquisitionCostCents || 0,
+        actualCostCents: l.actualAcquisitionCostCents || 0,
+        startingPriceCents: l.startingPriceCents,
+        reservePriceCents: l.reservePriceCents || 0,
+        exitDate: l.paymentStatus === 'PAID' && ord ? ord.updatedAt : null,
+        saleDate: s ? s.endsAt : null,
+        status: l.status,
+        paymentStatus: l.paymentStatus,
+        adjudicationPriceCents: l.status === 'SOLD' ? l.currentPriceCents : null,
+        buyerIdentity: w
+          ? `${w.companyName ? `${w.companyName} — ` : ''}${w.firstName || ''} ${w.lastName || ''} (${w.city || ''}, ${w.country || 'FR'})`.trim()
+          : null,
+        buyerSiretVat: w?.vatNumber || null,
+        orderNumber: ord?.orderNumber || null,
+      };
+    });
+
+    res.json({
+      register: policeEntries,
+      count: policeEntries.length,
+      institution: 'Galerie & Cabinet De Coster',
+      legalReference: 'Article 321-7 et R. 321-1 du Code Pénal — Registre des Objets Mobiliers',
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Tous les bordereaux de transaction
+app.get('/api/admin/documents', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const docs = await db
+      .select({
+        doc: transactionDocuments,
+        orderNumber: orders.orderNumber,
+        buyerEmail: users.email,
+        buyerCompany: users.companyName,
+      })
+      .from(transactionDocuments)
+      .innerJoin(orders, eq(transactionDocuments.orderId, orders.id))
+      .innerJoin(users, eq(orders.buyerId, users.id))
+      .orderBy(desc(transactionDocuments.createdAt));
+
+    res.json({ documents: docs });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }

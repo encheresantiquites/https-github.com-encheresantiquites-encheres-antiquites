@@ -36,6 +36,34 @@ export const requireAuth = async (
         console.warn('DB error matching token user:', err);
       }
 
+      // Secours immédiat pour le compte administrateur (Monsieur De Coster)
+      if (email === 'admin@encheres-antiquites.fr' || email === '14011981@encheres-antiquites.fr') {
+        const fallbackAdminUser: any = {
+          id: 1,
+          uid: '14011981',
+          email: 'admin@encheres-antiquites.fr',
+          role: 'ADMIN',
+          status: 'APPROVED',
+          emailVerified: true,
+          firstName: 'Monsieur',
+          lastName: 'De Coster',
+          phone: '14011981',
+          companyName: 'Galerie & Cabinet De Coster',
+          activity: 'Antiquaire Vendeur & Administrateur',
+          country: 'France',
+          addressLine1: '14 rue des Antiquaires',
+          postalCode: '59000',
+          city: 'Lille',
+          acceptedTerms: true,
+          acceptedTermsVersion: 'v1.0 (2026)',
+          createdAt: new Date(),
+          updatedAt: new Date(),
+        };
+        req.dbUser = fallbackAdminUser;
+        req.user = { uid: fallbackAdminUser.uid, email: fallbackAdminUser.email } as any;
+        return next();
+      }
+
       // Secours immédiat pour le compte de test professionnel
       if (email === 'client.test@enchere-antiquites.fr') {
         const fallbackTestUser: any = {

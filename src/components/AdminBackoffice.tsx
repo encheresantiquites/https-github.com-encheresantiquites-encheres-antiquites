@@ -28,6 +28,14 @@ import {
   Tag,
   Filter,
   Scale,
+  Edit,
+  Trash2,
+  Download,
+  Printer,
+  FileText,
+  ShieldCheck,
+  BookOpen,
+  Upload,
 } from 'lucide-react';
 import { DEFAULT_SHIPPING_TIERS, calculateShipping } from '../lib/shipping.ts';
 import {
@@ -44,7 +52,7 @@ interface AdminBackofficeProps {
 export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
   const { token } = useAuth();
   const [adminTab, setAdminTab] = useState<
-    'dashboard' | 'sales' | 'clients' | 'messages' | 'acquisitions' | 'shipments' | 'audit' | 'settings'
+    'dashboard' | 'lots' | 'sales' | 'ended_sales' | 'orders' | 'police' | 'clients' | 'messages' | 'acquisitions' | 'shipments' | 'audit' | 'settings'
   >('dashboard');
 
   const [loading, setLoading] = useState(true);
@@ -53,6 +61,8 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
   const [salesList, setSalesList] = useState<Sale[]>([]);
   const [selectedSaleId, setSelectedSaleId] = useState<number | null>(null);
   const [lotsList, setLotsList] = useState<any[]>([]);
+  const [ordersList, setOrdersList] = useState<any[]>([]);
+  const [policeRegister, setPoliceRegister] = useState<any[]>([]);
   const [acquisitions, setAcquisitions] = useState<AcquisitionItem[]>([]);
   const [shipments, setShipments] = useState<any[]>([]);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -64,17 +74,58 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
   const [unreadOnlyFilter, setUnreadOnlyFilter] = useState<boolean>(false);
   const [previewLot, setPreviewLot] = useState<Lot | null>(null);
 
-  // Filter & Search
+  // Filters & Search
   const [clientSearch, setClientSearch] = useState('');
   const [clientFilterStatus, setClientFilterStatus] = useState<string>('ALL');
+  const [lotsSearch, setLotsSearch] = useState('');
+  const [lotsFilterStatus, setLotsFilterStatus] = useState<string>('ALL');
+  const [lotsFilterSale, setLotsFilterSale] = useState<string>('ALL');
+  const [lotsFilterCategory, setLotsFilterCategory] = useState<string>('ALL');
+  const [ordersSearch, setOrdersSearch] = useState('');
+  const [ordersFilterStatus, setOrdersFilterStatus] = useState<string>('ALL');
+  const [policeSearch, setPoliceSearch] = useState('');
 
   // Modals
   const [newLotModalOpen, setNewLotModalOpen] = useState(false);
+  const [editLotModalItem, setEditLotModalItem] = useState<any | null>(null);
+  const [manualPaymentModalItem, setManualPaymentModalItem] = useState<any | null>(null);
+  const [viewBordereauItem, setViewBordereauItem] = useState<any | null>(null);
+  const [clientDetailModalUser, setClientDetailModalUser] = useState<User | null>(null);
   const [newSaleModalOpen, setNewSaleModalOpen] = useState(false);
   const [assignLotModalOpen, setAssignLotModalOpen] = useState(false);
   const [selectedLotsToAssign, setSelectedLotsToAssign] = useState<number[]>([]);
   const [acquisitionModalItem, setAcquisitionModalItem] = useState<AcquisitionItem | null>(null);
   const [shipmentModalItem, setShipmentModalItem] = useState<any | null>(null);
+
+  // Edit Lot Form
+  const [editLotForm, setEditLotForm] = useState<any>({
+    id: 0,
+    reference: '',
+    title: '',
+    description: '',
+    category: '',
+    period: '',
+    dimensions: '',
+    weight: '',
+    conditionReport: '',
+    flaws: '',
+    observations: '',
+    startingPriceCents: 0,
+    reservePriceCents: 0,
+    targetAcquisitionCostCents: 0,
+    status: 'ACTIVE',
+    saleId: null,
+    shippingQuoteRequired: false,
+    customShippingCostCents: null,
+    images: [] as string[],
+  });
+
+  // Manual Payment Form
+  const [manualPaymentForm, setManualPaymentForm] = useState({
+    paymentMethod: 'Virement bancaire',
+    paymentReference: '',
+    notes: '',
+  });
 
   // New Sale Form
   const [newSaleForm, setNewSaleForm] = useState({
@@ -106,14 +157,21 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
     startingPriceCents: 20000,
     reservePriceCents: 30000,
     targetAcquisitionCostCents: 15000,
+    actualAcquisitionCostCents: 12000,
+    status: 'ACTIVE' as 'DRAFT' | 'SCHEDULED' | 'ACTIVE',
+    startDate: (() => {
+      const dates = calculateNextSaleDates('MARDI');
+      return dates.startsAt.toISOString().split('T')[0];
+    })(),
+    startTime: '10:00',
+    endDate: (() => {
+      const dates = calculateNextSaleDates('MARDI');
+      return dates.endsAt.toISOString().split('T')[0];
+    })(),
+    endTime: '22:00',
     endsAt: (() => {
-      const d = new Date();
-      const day = d.getDay();
-      const diff = day === 0 ? 0 : 7 - day;
-      const sun = new Date(d);
-      sun.setDate(d.getDate() + diff);
-      sun.setHours(22, 0, 0, 0);
-      return sun.toISOString();
+      const dates = calculateNextSaleDates('MARDI');
+      return dates.endsAt.toISOString();
     })(),
     images: ['https://images.unsplash.com/photo-1615529328331-f8917597711f?auto=format&fit=crop&w=800&q=80'],
   });
@@ -213,6 +271,20 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
         const d = await chatRes.json();
         setChatMessagesList(d.messages || []);
       }
+
+      // 9. Orders & Adjudications
+      const ordersRes = await fetch('/api/admin/orders', { headers });
+      if (ordersRes.ok) {
+        const d = await ordersRes.json();
+        setOrdersList(d.orders || []);
+      }
+
+      // 10. Livre de Police
+      const policeRes = await fetch('/api/admin/police-register', { headers });
+      if (policeRes.ok) {
+        const d = await policeRes.json();
+        setPoliceRegister(d.register || []);
+      }
     } catch (err) {
       console.error('Erreur chargement données administration:', err);
     } finally {
@@ -223,6 +295,163 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
   useEffect(() => {
     loadAdminData();
   }, [token]);
+
+  // Ouvrir la modale d'édition de lot
+  const handleOpenEditLot = (lotItem: any) => {
+    const l = lotItem.lot || lotItem;
+    setEditLotForm({
+      id: l.id,
+      reference: l.reference,
+      title: l.title,
+      description: l.description,
+      category: l.category,
+      period: l.period || '',
+      dimensions: l.dimensions || '',
+      weight: l.weight || '',
+      conditionReport: l.conditionReport || '',
+      flaws: l.flaws || '',
+      observations: l.observations || '',
+      startingPriceCents: l.startingPriceCents,
+      reservePriceCents: l.reservePriceCents || 0,
+      targetAcquisitionCostCents: l.targetAcquisitionCostCents || 0,
+      status: l.status,
+      saleId: l.saleId || null,
+      shippingQuoteRequired: Boolean(l.shippingQuoteRequired),
+      customShippingCostCents: l.customShippingCostCents || null,
+      images: Array.isArray(l.images) ? l.images : [],
+    });
+    setEditLotModalItem(l);
+  };
+
+  // Mettre à jour un lot existant
+  const handleUpdateLot = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !editLotModalItem) return;
+    try {
+      const res = await fetch(`/api/admin/lots/${editLotModalItem.id}`, {
+        method: 'PUT',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(editLotForm),
+      });
+      if (res.ok) {
+        setEditLotModalItem(null);
+        await loadAdminData();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Erreur lors de la mise à jour du lot');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Supprimer définitivement un lot
+  const handleDeleteLot = async (lotId: number, ref: string) => {
+    if (!token) return;
+    if (!confirm(`Confirmer la suppression du lot ${ref} ? Cette action est irréversible.`)) return;
+    try {
+      const res = await fetch(`/api/admin/lots/${lotId}`, {
+        method: 'DELETE',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (res.ok) {
+        await loadAdminData();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Impossible de supprimer ce lot');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Valider manuellement le paiement d'une commande
+  const handleMarkOrderPaid = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!token || !manualPaymentModalItem) return;
+    try {
+      const res = await fetch(`/api/admin/orders/${manualPaymentModalItem.id}/mark-paid`, {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(manualPaymentForm),
+      });
+      if (res.ok) {
+        setManualPaymentModalItem(null);
+        setManualPaymentForm({ paymentMethod: 'Virement bancaire', paymentReference: '', notes: '' });
+        await loadAdminData();
+      } else {
+        const err = await res.json();
+        alert(err.error || 'Erreur lors de la validation du règlement');
+      }
+    } catch (e) {
+      console.error(e);
+    }
+  };
+
+  // Export conforme du Livre de Police en CSV
+  const handleExportPoliceCSV = () => {
+    if (policeRegister.length === 0) {
+      alert('Aucun objet enregistré dans le livre de police.');
+      return;
+    }
+    const headers = [
+      'N° Ordre',
+      'Date Entrée',
+      'Référence',
+      'Désignation complète de l\'objet',
+      'Catégorie',
+      'Époque',
+      'Dimensions',
+      'Poids',
+      'Provenance / Cédant',
+      'Prix acquisition (€)',
+      'Mise à prix (€)',
+      'Prix réserve (€)',
+      'Statut',
+      'Date Sortie / Vente',
+      'Acquéreur (Nom / Société)',
+      'SIRET / TVA',
+      'Prix Adjudication (€)',
+      'N° Bordereau / Commande',
+    ];
+
+    const rows = policeRegister.map((e) => [
+      e.orderIndex,
+      e.entryDate ? new Date(e.entryDate).toLocaleDateString('fr-FR') : '',
+      `"${e.reference}"`,
+      `"${(e.description || '').replace(/"/g, '""')}"`,
+      `"${e.category || ''}"`,
+      `"${e.period || ''}"`,
+      `"${e.dimensions || ''}"`,
+      `"${e.weight || ''}"`,
+      `"${(e.source || '').replace(/"/g, '""')}"`,
+      (e.actualCostCents ? e.actualCostCents / 100 : e.targetCostCents / 100).toFixed(2),
+      (e.startingPriceCents / 100).toFixed(2),
+      (e.reservePriceCents ? e.reservePriceCents / 100 : 0).toFixed(2),
+      `"${e.status}"`,
+      e.exitDate ? new Date(e.exitDate).toLocaleDateString('fr-FR') : (e.saleDate ? new Date(e.saleDate).toLocaleDateString('fr-FR') : ''),
+      `"${(e.buyerIdentity || '—').replace(/"/g, '""')}"`,
+      `"${e.buyerSiretVat || '—'}"`,
+      e.adjudicationPriceCents ? (e.adjudicationPriceCents / 100).toFixed(2) : '—',
+      `"${e.orderNumber || '—'}"`,
+    ]);
+
+    const csvContent = '\uFEFF' + [headers.join(';'), ...rows.map((r) => r.join(';'))].join('\r\n');
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.setAttribute('download', `LIVRE_DE_POLICE_DE_COSTER_${new Date().toISOString().split('T')[0]}.csv`);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
 
   // Répondre à un message de chat en direct
   const handleSendAdminReply = async (originalMsg: any) => {
@@ -414,19 +643,53 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
     e.preventDefault();
     if (!token) return;
     try {
+      const finalEndsAt = newLotForm.endDate && newLotForm.endTime
+        ? new Date(`${newLotForm.endDate}T${newLotForm.endTime}:00`).toISOString()
+        : newLotForm.endsAt;
+
+      const payload = {
+        ...newLotForm,
+        endsAt: finalEndsAt,
+      };
+
       const res = await fetch('/api/admin/lots', {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify(newLotForm),
+        body: JSON.stringify(payload),
       });
       if (res.ok) {
         setNewLotModalOpen(false);
         await loadAdminData();
+      } else {
+        const data = await res.json();
+        alert(data.error || 'Erreur lors de la création du lot.');
       }
-    } catch (e) {
+    } catch (e: any) {
+      console.error(e);
+      alert(e.message || 'Erreur réseau.');
+    }
+  };
+
+  // Marquer un lot comme impayé après expiration du délai de 24h
+  const handleMarkUnpaid = async (lotId: number) => {
+    if (!token) return;
+    if (!confirm('Déclarer cet objet impayé ? La commande sera annulée et le lot redeviendra disponible pour réattribution au 2e enchérisseur ou remise en vente.')) return;
+    try {
+      const res = await fetch(`/api/admin/lots/${lotId}/mark-unpaid`, {
+        method: 'POST',
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      const data = await res.json();
+      if (res.ok) {
+        alert(data.message || 'Lot marqué comme impayé avec succès.');
+        await loadAdminData();
+      } else {
+        alert(data.error || 'Erreur lors du traitement du lot impayé.');
+      }
+    } catch (e: any) {
       console.error(e);
     }
   };
@@ -532,7 +795,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
       <div className="flex flex-wrap gap-2 border-b border-slate-800 pb-4 mb-6">
         <button
           onClick={() => setAdminTab('dashboard')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
             adminTab === 'dashboard'
               ? 'bg-[#D4AF37] text-slate-950 shadow-md'
               : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
@@ -543,8 +806,73 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
         </button>
 
         <button
+          onClick={() => setAdminTab('sales')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            adminTab === 'sales'
+              ? 'bg-[#D4AF37] text-slate-950 shadow-md'
+              : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <Gavel className="w-4 h-4" />
+          <span>Ventes (Mardi / Vendredi)</span>
+        </button>
+
+        <button
+          onClick={() => setAdminTab('ended_sales')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            adminTab === 'ended_sales'
+              ? 'bg-[#D4AF37] text-slate-950 shadow-md'
+              : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <Clock className="w-4 h-4" />
+          <span>Ventes terminées ({salesList.filter((s) => s.status === 'ENDED' || s.status === 'CLOSED').length})</span>
+        </button>
+
+        <button
+          onClick={() => setAdminTab('lots')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            adminTab === 'lots'
+              ? 'bg-[#D4AF37] text-slate-950 shadow-md'
+              : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <Package className="w-4 h-4" />
+          <span>Catalogue & Lots ({lotsList.length})</span>
+        </button>
+
+        <button
+          onClick={() => setAdminTab('orders')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            adminTab === 'orders'
+              ? 'bg-[#D4AF37] text-slate-950 shadow-md'
+              : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <FileText className="w-4 h-4" />
+          <span>Bordereaux & Règlements ({ordersList.length})</span>
+          {ordersList.filter((o) => o.status === 'AWAITING_PAYMENT').length > 0 && (
+            <span className="bg-amber-500 text-slate-950 text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold animate-pulse">
+              {ordersList.filter((o) => o.status === 'AWAITING_PAYMENT').length} à payer
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setAdminTab('police')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            adminTab === 'police'
+              ? 'bg-[#D4AF37] text-slate-950 shadow-md'
+              : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <BookOpen className="w-4 h-4" />
+          <span>Livre de Police (Légal)</span>
+        </button>
+
+        <button
           onClick={() => setAdminTab('clients')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
             adminTab === 'clients'
               ? 'bg-[#D4AF37] text-slate-950 shadow-md'
               : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
@@ -560,44 +888,15 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
         </button>
 
         <button
-          onClick={() => setAdminTab('messages')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
-            adminTab === 'messages'
-              ? 'bg-[#D4AF37] text-slate-950 shadow-md'
-              : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
-          }`}
-        >
-          <MessageSquare className="w-4 h-4" />
-          <span>Chat & Questions ({chatMessagesList.length})</span>
-          {chatMessagesList.filter((m) => !m.isRead && m.senderType === 'BUYER').length > 0 && (
-            <span className="bg-amber-500 text-slate-950 text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold animate-pulse">
-              {chatMessagesList.filter((m) => !m.isRead && m.senderType === 'BUYER').length}
-            </span>
-          )}
-        </button>
-
-        <button
-          onClick={() => setAdminTab('sales')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
-            adminTab === 'sales'
-              ? 'bg-[#D4AF37] text-slate-950 shadow-md'
-              : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
-          }`}
-        >
-          <Gavel className="w-4 h-4" />
-          <span>Ventes & Lots ({lotsList.length})</span>
-        </button>
-
-        <button
           onClick={() => setAdminTab('acquisitions')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
             adminTab === 'acquisitions'
               ? 'bg-[#D4AF37] text-slate-950 shadow-md'
               : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
           }`}
         >
           <Coins className="w-4 h-4" />
-          <span>Trésorerie & Objets à acquérir</span>
+          <span>Trésorerie & Achats</span>
           {metrics?.acquisitionsMetrics?.toAcquireCount > 0 && (
             <span className="bg-amber-500 text-slate-950 text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold">
               {metrics.acquisitionsMetrics.toAcquireCount}
@@ -607,7 +906,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
 
         <button
           onClick={() => setAdminTab('shipments')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
             adminTab === 'shipments'
               ? 'bg-[#D4AF37] text-slate-950 shadow-md'
               : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
@@ -618,8 +917,25 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
         </button>
 
         <button
+          onClick={() => setAdminTab('messages')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            adminTab === 'messages'
+              ? 'bg-[#D4AF37] text-slate-950 shadow-md'
+              : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <MessageSquare className="w-4 h-4" />
+          <span>Messages & Chat ({chatMessagesList.length})</span>
+          {chatMessagesList.filter((m) => !m.isRead && m.senderType === 'BUYER').length > 0 && (
+            <span className="bg-amber-500 text-slate-950 text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold animate-pulse">
+              {chatMessagesList.filter((m) => !m.isRead && m.senderType === 'BUYER').length}
+            </span>
+          )}
+        </button>
+
+        <button
           onClick={() => setAdminTab('audit')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
             adminTab === 'audit'
               ? 'bg-[#D4AF37] text-slate-950 shadow-md'
               : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
@@ -631,14 +947,14 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
 
         <button
           onClick={() => setAdminTab('settings')}
-          className={`flex items-center gap-2 px-4 py-2.5 rounded-xl text-xs font-bold transition-all ${
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
             adminTab === 'settings'
               ? 'bg-[#D4AF37] text-slate-950 shadow-md'
               : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
           }`}
         >
           <Settings className="w-4 h-4" />
-          <span>Configuration Vendeur</span>
+          <span>Paramètres</span>
         </button>
       </div>
 
@@ -1061,10 +1377,17 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                         )}
                       </td>
                       <td className="p-3 text-right space-x-1.5">
+                        <button
+                          onClick={() => setClientDetailModalUser(c)}
+                          className="bg-slate-800 hover:bg-slate-700 text-amber-300 px-2 py-1 rounded text-[11px] border border-slate-700 transition-colors cursor-pointer"
+                          title="Consulter le dossier professionnel complet (SIRET, Kbis, Coordonnées)"
+                        >
+                          Dossier KYC
+                        </button>
                         {c.status !== 'APPROVED' && (
                           <button
                             onClick={() => handleClientStatusChange(c.id, 'APPROVED')}
-                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-2 py-1 rounded text-[11px] transition-colors"
+                            className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-2 py-1 rounded text-[11px] transition-colors cursor-pointer"
                           >
                             Valider
                           </button>
@@ -1072,7 +1395,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                         {c.status !== 'SUSPENDED' && (
                           <button
                             onClick={() => handleClientStatusChange(c.id, 'SUSPENDED')}
-                            className="bg-amber-800 hover:bg-amber-700 text-amber-100 px-2 py-1 rounded text-[11px] transition-colors"
+                            className="bg-amber-800 hover:bg-amber-700 text-amber-100 px-2 py-1 rounded text-[11px] transition-colors cursor-pointer"
                           >
                             Suspendre
                           </button>
@@ -1080,7 +1403,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                         {c.status !== 'BLOCKED' && (
                           <button
                             onClick={() => handleClientStatusChange(c.id, 'BLOCKED')}
-                            className="bg-rose-900 hover:bg-rose-800 text-rose-200 px-2 py-1 rounded text-[11px] transition-colors"
+                            className="bg-rose-900 hover:bg-rose-800 text-rose-200 px-2 py-1 rounded text-[11px] transition-colors cursor-pointer"
                           >
                             Bloquer
                           </button>
@@ -1726,6 +2049,918 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
         </div>
       )}
 
+      {/* 3b. VENTES TERMINÉES & BILAN DES ADJUDICATIONS */}
+      {adminTab === 'ended_sales' && (() => {
+        const endedSales = salesList.filter((s) => s.status === 'ENDED' || s.status === 'CLOSED');
+        const paidOrders = ordersList.filter((o) => o.status === 'PAID');
+        const pendingOrders = ordersList.filter((o) => o.status === 'AWAITING_PAYMENT');
+        const totalAdjudicatedCents = ordersList.reduce((acc, o) => acc + (o.finalPriceCents || 0), 0);
+        const totalCollectedCents = paidOrders.reduce((acc, o) => acc + (o.totalCents || 0), 0);
+
+        return (
+          <div className="space-y-6">
+            <div className="flex flex-wrap items-center justify-between gap-4">
+              <div>
+                <span className="text-xs uppercase tracking-widest text-[#D4AF37] font-semibold block">
+                  HISTORIQUE OFFICIEL DES VACATIONS
+                </span>
+                <h2 className="text-xl font-serif font-bold text-amber-200 mt-0.5">
+                  Ventes Terminées & Bilan des Adjudications
+                </h2>
+                <p className="text-xs text-slate-400 mt-0.5">
+                  Surveillance des adjudicataires, contrôle du délai de paiement de 24h et transfert en cascade aux seconds enchérisseurs en cas d'impayé.
+                </p>
+              </div>
+            </div>
+
+            {/* Metrics cards for ended sales */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+              <div className="bg-[#1C2541] border border-slate-800 rounded-xl p-4 shadow-sm">
+                <div className="text-slate-400 text-xs font-semibold mb-1">Ventes clôturées</div>
+                <div className="text-2xl font-bold font-mono text-slate-100">{endedSales.length}</div>
+                <div className="text-[11px] text-slate-500 mt-1">Vacations du Mardi / Vendredi</div>
+              </div>
+
+              <div className="bg-[#1C2541] border border-slate-800 rounded-xl p-4 shadow-sm">
+                <div className="text-slate-400 text-xs font-semibold mb-1">Volume Adjugé</div>
+                <div className="text-2xl font-bold font-mono text-amber-300">
+                  {(totalAdjudicatedCents / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+                </div>
+                <div className="text-[11px] text-slate-500 mt-1">{ordersList.length} objet(s) adjugé(s)</div>
+              </div>
+
+              <div className="bg-[#1C2541] border border-emerald-900/50 rounded-xl p-4 shadow-sm bg-emerald-950/20">
+                <div className="text-emerald-400 text-xs font-semibold mb-1">Règlements Encaissés</div>
+                <div className="text-2xl font-bold font-mono text-emerald-300">
+                  {(totalCollectedCents / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+                </div>
+                <div className="text-[11px] text-emerald-500/80 mt-1">
+                  {paidOrders.length} bordereau(x) soldé(s)
+                </div>
+              </div>
+
+              <div className="bg-[#1C2541] border border-amber-900/50 rounded-xl p-4 shadow-sm bg-amber-950/20">
+                <div className="text-amber-400 text-xs font-semibold mb-1">En attente sous 24h</div>
+                <div className="text-2xl font-bold font-mono text-amber-300">
+                  {pendingOrders.length} lot(s)
+                </div>
+                <div className="text-[11px] text-amber-500/80 mt-1">
+                  Échéance stricte 24h avant cascade
+                </div>
+              </div>
+            </div>
+
+            {/* List of Ended Sales */}
+            {endedSales.length === 0 ? (
+              <div className="bg-[#1C2541]/70 border border-slate-800 rounded-2xl p-8 text-center text-slate-400 space-y-3">
+                <Clock className="w-10 h-10 text-amber-400/60 mx-auto" />
+                <h3 className="font-serif text-lg font-bold text-slate-200">
+                  Aucune vente bi-hebdomadaire n'est encore archivée comme terminée
+                </h3>
+                <p className="text-xs text-slate-400 max-w-md mx-auto">
+                  Dès qu'une vente du Mardi ou Vendredi atteint 22h00 ou est clôturée, elle apparaît automatiquement ici avec l'état complet des adjudications et bordereaux.
+                </p>
+                <button
+                  onClick={() => setAdminTab('sales')}
+                  className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 px-4 py-2 rounded-xl text-xs font-bold transition-all inline-flex items-center gap-1.5"
+                >
+                  <span>Voir les ventes programmées et en cours</span>
+                </button>
+              </div>
+            ) : (
+              <div className="space-y-6">
+                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
+                  {endedSales.map((sale) => {
+                    const isSelected = selectedSaleId === sale.id;
+                    const dateHeader = formatSaleDateHeader(sale.startsAt);
+                    const attachedLots = lotsList.filter((item) => item.lot?.saleId === sale.id);
+                    const soldCount = attachedLots.filter((item) => item.lot?.status === 'SOLD').length;
+
+                    return (
+                      <div
+                        key={sale.id}
+                        onClick={() => setSelectedSaleId(sale.id)}
+                        className={`p-4 rounded-xl border transition-all cursor-pointer ${
+                          isSelected
+                            ? 'bg-[#1C2541] border-[#D4AF37] shadow-lg ring-1 ring-[#D4AF37]'
+                            : 'bg-[#1C2541]/60 border-slate-800 hover:border-slate-700 hover:bg-[#1C2541]/90'
+                        }`}
+                      >
+                        <div className="flex items-center justify-between mb-2">
+                          <span className="font-mono text-xs font-bold text-amber-400">
+                            {sale.reference}
+                          </span>
+                          <span className="text-[10px] font-bold px-2 py-0.5 rounded-full uppercase bg-slate-800 text-slate-300 border border-slate-700">
+                            Terminée
+                          </span>
+                        </div>
+                        <h4 className="font-serif font-bold text-sm text-slate-100 mb-1 truncate">
+                          {dateHeader}
+                        </h4>
+                        <div className="text-xs text-slate-400 line-clamp-1 mb-3">
+                          {sale.title}
+                        </div>
+                        <div className="flex items-center justify-between pt-2 border-t border-slate-800 text-[11px] text-slate-400">
+                          <span>{attachedLots.length} lot(s) au total</span>
+                          <span className="text-emerald-400 font-semibold">{soldCount} adjugé(s)</span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Table of all historical orders / adjudications */}
+            <div className="bg-[#1C2541] border border-slate-800 rounded-2xl p-6 shadow-xl space-y-4">
+              <div className="flex flex-wrap items-center justify-between gap-4 border-b border-slate-800 pb-4">
+                <div>
+                  <h3 className="font-serif font-bold text-base text-slate-100">
+                    Registre des Adjudications & Commandes ({ordersList.length})
+                  </h3>
+                  <p className="text-xs text-slate-400">
+                    Chaque adjudication est horodatée. En cas de non-règlement dans les 24h, transférez le lot au 2ème enchérisseur.
+                  </p>
+                </div>
+              </div>
+
+              <div className="overflow-x-auto">
+                <table className="w-full text-left border-collapse text-xs">
+                  <thead>
+                    <tr className="border-b border-slate-800 text-slate-400 bg-slate-900/60">
+                      <th className="p-3 font-semibold">N° Bordereau</th>
+                      <th className="p-3 font-semibold">Objet Adjugé</th>
+                      <th className="p-3 font-semibold">Adjudicataire (1er)</th>
+                      <th className="p-3 font-semibold">Montant Adjugé</th>
+                      <th className="p-3 font-semibold">Livraison</th>
+                      <th className="p-3 font-semibold">Total Dû</th>
+                      <th className="p-3 font-semibold">Statut Règlement (24h)</th>
+                      <th className="p-3 font-semibold text-right">Actions</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    {ordersList.map((order) => {
+                      const isPaid = order.status === 'PAID';
+                      const isAwaiting = order.status === 'AWAITING_PAYMENT';
+                      const isCancelled = order.status === 'CANCELLED';
+
+                      return (
+                        <tr key={order.id} className="hover:bg-slate-900/40 transition-colors">
+                          <td className="p-3 font-mono font-bold text-amber-300">
+                            {order.orderNumber}
+                          </td>
+                          <td className="p-3">
+                            <div className="font-serif font-bold text-slate-100 truncate max-w-[200px]">
+                              {order.lot?.title || `Lot #${order.lotId}`}
+                            </div>
+                            <div className="text-[10px] font-mono text-slate-400">
+                              Réf : {order.lot?.reference}
+                            </div>
+                          </td>
+                          <td className="p-3">
+                            <div className="font-semibold text-slate-200">
+                              {order.buyer?.companyName || `${order.buyer?.firstName || ''} ${order.buyer?.lastName || ''}`.trim() || order.buyer?.email}
+                            </div>
+                            <div className="text-[10px] text-slate-400 font-mono">
+                              {order.buyer?.city} ({order.buyer?.country || 'FR'})
+                            </div>
+                          </td>
+                          <td className="p-3 font-mono text-slate-200">
+                            {(order.finalPriceCents / 100).toFixed(2)} €
+                          </td>
+                          <td className="p-3 font-mono text-slate-400">
+                            {order.shippingCostCents ? `${(order.shippingCostCents / 100).toFixed(2)} €` : 'Inclus'}
+                          </td>
+                          <td className="p-3 font-mono font-bold text-amber-200">
+                            {(order.totalCents / 100).toFixed(2)} €
+                          </td>
+                          <td className="p-3">
+                            {isPaid && (
+                              <span className="inline-flex items-center gap-1 bg-emerald-950/80 text-emerald-300 border border-emerald-600/40 px-2 py-0.5 rounded text-[10px] font-bold">
+                                <CheckCircle2 className="w-3 h-3 text-emerald-400" />
+                                RÉGLÉ
+                              </span>
+                            )}
+                            {isAwaiting && (
+                              <span className="inline-flex items-center gap-1 bg-amber-950/80 text-amber-300 border border-amber-600/40 px-2 py-0.5 rounded text-[10px] font-bold animate-pulse">
+                                <Clock className="w-3 h-3 text-amber-400" />
+                                EN ATTENTE (24h)
+                              </span>
+                            )}
+                            {isCancelled && (
+                              <span className="inline-flex items-center gap-1 bg-rose-950/80 text-rose-300 border border-rose-600/40 px-2 py-0.5 rounded text-[10px] font-bold">
+                                <X className="w-3 h-3 text-rose-400" />
+                                IMPAYÉ / ANNULÉ
+                              </span>
+                            )}
+                          </td>
+                          <td className="p-3 text-right">
+                            <div className="flex items-center justify-end gap-1.5">
+                              {/* Valider manuellement le paiement */}
+                              {isAwaiting && (
+                                <button
+                                  type="button"
+                                  onClick={() => setManualPaymentModalItem(order)}
+                                  className="bg-emerald-600 hover:bg-emerald-500 text-white px-2 py-1 rounded text-[10px] font-bold transition-all shadow-sm"
+                                  title="Valider le règlement reçu par virement"
+                                >
+                                  Valider paiement
+                                </button>
+                              )}
+
+                              {/* Transmettre au second enchérisseur si impayé */}
+                              {isAwaiting && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleOfferSecondBidder(order.lotId)}
+                                  className="bg-blue-600 hover:bg-blue-500 text-white px-2 py-1 rounded text-[10px] font-bold transition-all"
+                                  title="Transmettre au 2ème enchérisseur (Défaut de paiement 24h)"
+                                >
+                                  Transmettre au 2nd
+                                </button>
+                              )}
+
+                              {/* Marquer impayé */}
+                              {isAwaiting && (
+                                <button
+                                  type="button"
+                                  onClick={() => handleMarkUnpaid(order.lotId)}
+                                  className="bg-rose-900/60 hover:bg-rose-800 text-rose-200 border border-rose-700/50 px-2 py-1 rounded text-[10px] font-bold transition-all"
+                                  title="Déclarer ce lot impayé"
+                                >
+                                  Impayé
+                                </button>
+                              )}
+
+                              {/* Consulter le bordereau / facture */}
+                              <button
+                                type="button"
+                                onClick={() => setViewBordereauItem(order)}
+                                className="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-amber-500/30 px-2 py-1 rounded text-[10px] font-semibold flex items-center gap-1"
+                                title="Voir le Bordereau d'adjudication officiel"
+                              >
+                                <FileText className="w-3 h-3" />
+                                <span>Bordereau</span>
+                              </button>
+                            </div>
+                          </td>
+                        </tr>
+                      );
+                    })}
+                  </tbody>
+                </table>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* 2b. CATALOGUE GÉNÉRAL & GESTION DES LOTS */}
+      {adminTab === 'lots' && (
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <span className="text-xs uppercase tracking-widest text-[#D4AF37] font-semibold block">
+                INVENTAIRE & GESTION DU CATALOGUE
+              </span>
+              <h2 className="text-xl font-serif font-bold text-amber-200 mt-0.5">
+                Catalogue Général des Objets & Lots ({lotsList.length})
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Création, modification, affectation aux ventes du Mardi ou Vendredi, suivi des offres et prix de réserve secrets.
+              </p>
+            </div>
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={() => setNewLotModalOpen(true)}
+                className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-2 shadow-lg transition-all cursor-pointer"
+              >
+                <Plus className="w-4 h-4" />
+                <span>+ Créer un nouvel objet</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Quick Metrics Bar for Lots */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold uppercase">Total Catalogue</span>
+              <span className="font-mono text-xl font-bold text-slate-100">{lotsList.length} objets</span>
+            </div>
+            <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold uppercase">Affectés à une vente</span>
+              <span className="font-mono text-xl font-bold text-amber-300">
+                {lotsList.filter((item) => (item.lot || item).saleId).length} lots
+              </span>
+            </div>
+            <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold uppercase">Non affectés (En stock)</span>
+              <span className="font-mono text-xl font-bold text-blue-300">
+                {lotsList.filter((item) => !(item.lot || item).saleId).length} prêts
+              </span>
+            </div>
+            <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold uppercase">Adjugés / Vendus</span>
+              <span className="font-mono text-xl font-bold text-emerald-300">
+                {lotsList.filter((item) => (item.lot || item).status === 'SOLD').length} vendus
+              </span>
+            </div>
+          </div>
+
+          {/* Filters Bar */}
+          <div className="bg-[#1C2541]/80 p-4 rounded-xl border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="relative flex-1 min-w-[220px]">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Rechercher par référence, titre, catégorie, époque..."
+                value={lotsSearch}
+                onChange={(e) => setLotsSearch(e.target.value)}
+                className="w-full bg-[#0B132B] border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:border-amber-400"
+              />
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <select
+                value={lotsFilterSale}
+                onChange={(e) => setLotsFilterSale(e.target.value)}
+                className="bg-[#0B132B] border border-slate-700 rounded-lg px-2.5 py-2 text-slate-200"
+              >
+                <option value="ALL">Toutes les ventes</option>
+                <option value="ORPHAN">Non affectés à une vente</option>
+                {salesList.map((s) => (
+                  <option key={s.id} value={String(s.id)}>
+                    {s.reference} — {s.saleDay === 'VENDREDI' ? 'Vendredi' : 'Mardi'} ({s.status})
+                  </option>
+                ))}
+              </select>
+
+              <select
+                value={lotsFilterStatus}
+                onChange={(e) => setLotsFilterStatus(e.target.value)}
+                className="bg-[#0B132B] border border-slate-700 rounded-lg px-2.5 py-2 text-slate-200"
+              >
+                <option value="ALL">Tous les statuts</option>
+                <option value="ACTIVE">ACTIF (En vente)</option>
+                <option value="DRAFT">BROUILLON</option>
+                <option value="SCHEDULED">PROGRAMMÉ</option>
+                <option value="SOLD">VENDU / ADJUGÉ</option>
+                <option value="UNSOLD">INVENDU / SANS OFFRE</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Lots Table */}
+          {(() => {
+            const filteredLots = lotsList.filter((item) => {
+              const l = item.lot || item;
+              const matchesSearch =
+                !lotsSearch ||
+                l.title.toLowerCase().includes(lotsSearch.toLowerCase()) ||
+                l.reference.toLowerCase().includes(lotsSearch.toLowerCase()) ||
+                (l.category && l.category.toLowerCase().includes(lotsSearch.toLowerCase())) ||
+                (l.period && l.period.toLowerCase().includes(lotsSearch.toLowerCase()));
+
+              const matchesStatus = lotsFilterStatus === 'ALL' || l.status === lotsFilterStatus;
+              const matchesCategory = lotsFilterCategory === 'ALL' || l.category === lotsFilterCategory;
+              const matchesSale =
+                lotsFilterSale === 'ALL' ||
+                (lotsFilterSale === 'ORPHAN' ? !l.saleId : String(l.saleId) === lotsFilterSale);
+
+              return matchesSearch && matchesStatus && matchesCategory && matchesSale;
+            });
+
+            if (filteredLots.length === 0) {
+              return (
+                <div className="bg-[#1C2541]/50 border border-slate-800 rounded-xl p-8 text-center text-slate-400">
+                  <Package className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+                  <p>Aucun objet ne correspond à vos critères de recherche.</p>
+                </div>
+              );
+            }
+
+            return (
+              <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#070B19] text-slate-400 uppercase text-[10px] font-semibold border-b border-slate-800">
+                      <tr>
+                        <th className="p-3">Objet</th>
+                        <th className="p-3">Désignation & Époque</th>
+                        <th className="p-3">Vente de rattachement</th>
+                        <th className="p-3 text-right">Mise à prix</th>
+                        <th className="p-3 text-right">Prix Réserve</th>
+                        <th className="p-3 text-right">Enchère actuelle</th>
+                        <th className="p-3">Statut</th>
+                        <th className="p-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80 text-slate-300">
+                      {filteredLots.map((item) => {
+                        const l = item.lot || item;
+                        const attachedSale = salesList.find((s) => s.id === l.saleId);
+
+                        return (
+                          <tr key={l.id} className="hover:bg-slate-800/40 transition-colors">
+                            <td className="p-3 font-mono font-bold text-amber-400 whitespace-nowrap">
+                              <div className="flex items-center gap-2.5">
+                                <img
+                                  src={getLotPrimaryImage(l.images)}
+                                  alt=""
+                                  className="w-10 h-10 rounded-lg object-cover border border-slate-700 shadow"
+                                />
+                                <div>
+                                  <span className="block">{l.reference}</span>
+                                  <span className="text-[10px] text-slate-500 font-sans">{l.weight || 'Poids N/C'}</span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="p-3">
+                              <div className="font-semibold text-slate-100 max-w-[220px] truncate">
+                                {l.title}
+                              </div>
+                              <div className="text-[11px] text-slate-400 flex items-center gap-1.5">
+                                <span>{l.category}</span>
+                                {l.period && <span>• {l.period}</span>}
+                              </div>
+                            </td>
+                            <td className="p-3">
+                              {attachedSale ? (
+                                <div>
+                                  <span className="font-mono text-xs font-bold text-amber-300 block">
+                                    {attachedSale.saleDay === 'VENDREDI' ? 'VENTE VENDREDI' : 'VENTE MARDI'}
+                                  </span>
+                                  <span className="text-[10px] text-slate-400 font-mono">
+                                    {attachedSale.reference} ({attachedSale.status})
+                                  </span>
+                                </div>
+                              ) : (
+                                <span className="text-[11px] text-blue-300/80 bg-blue-950/60 border border-blue-800/40 px-2 py-0.5 rounded-full inline-block font-mono">
+                                  En stock / Non affecté
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right font-mono text-slate-300">
+                              {formatEuro(l.startingPriceCents)}
+                            </td>
+                            <td className="p-3 text-right font-mono text-amber-300/90 font-semibold">
+                              {l.reservePriceCents > 0 ? formatEuro(l.reservePriceCents) : '—'}
+                            </td>
+                            <td className="p-3 text-right font-mono font-bold text-[#D4AF37]">
+                              {formatEuro(l.currentPriceCents)}
+                              <span className="text-[10px] text-slate-400 block font-sans font-normal">
+                                {l.bidCount} offre{l.bidCount > 1 ? 's' : ''}
+                              </span>
+                            </td>
+                            <td className="p-3">
+                              {l.status === 'SOLD' ? (
+                                <span className="bg-emerald-950 text-emerald-300 border border-emerald-600/50 px-2 py-0.5 rounded text-[10px] font-bold">
+                                  VENDU
+                                </span>
+                              ) : l.status === 'ACTIVE' ? (
+                                <span className="bg-amber-950 text-amber-300 border border-amber-600/50 px-2 py-0.5 rounded text-[10px] font-bold">
+                                  EN COURS
+                                </span>
+                              ) : l.status === 'UNSOLD' ? (
+                                <span className="bg-slate-900 text-slate-400 border border-slate-700 px-2 py-0.5 rounded text-[10px] font-bold">
+                                  INVENDU
+                                </span>
+                              ) : (
+                                <span className="bg-slate-900 text-slate-300 border border-slate-700 px-2 py-0.5 rounded text-[10px] font-semibold">
+                                  {l.status}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() => setPreviewLot(l)}
+                                  className="text-slate-400 hover:text-amber-300 hover:bg-slate-800 p-1.5 rounded transition-colors"
+                                  title="Consulter la fiche détaillée de l'objet"
+                                >
+                                  <Eye className="w-3.5 h-3.5" />
+                                </button>
+                                <button
+                                  onClick={() => handleOpenEditLot(item)}
+                                  className="text-slate-400 hover:text-blue-300 hover:bg-slate-800 p-1.5 rounded transition-colors"
+                                  title="Modifier les informations, prix et photos"
+                                >
+                                  <Edit className="w-3.5 h-3.5" />
+                                </button>
+                                {l.bidCount === 0 && l.status !== 'SOLD' && (
+                                  <button
+                                    onClick={() => handleDeleteLot(l.id, l.reference)}
+                                    className="text-rose-400 hover:text-rose-300 hover:bg-rose-950/40 p-1.5 rounded transition-colors"
+                                    title="Supprimer cet objet du catalogue"
+                                  >
+                                    <Trash2 className="w-3.5 h-3.5" />
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* 2c. BORDEREAUX D'ADJUDICATION & RÈGLEMENTS */}
+      {adminTab === 'orders' && (
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <span className="text-xs uppercase tracking-widest text-[#D4AF37] font-semibold block">
+                SUIVI CONTRACTUEL & COMPTABILITÉ
+              </span>
+              <h2 className="text-xl font-serif font-bold text-amber-200 mt-0.5">
+                Bordereaux d'Adjudication & Règlements ({ordersList.length})
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Contrôle strict du délai de règlement de 24h, validation des encaissements et transmission au second enchérisseur en cas de défaillance.
+              </p>
+            </div>
+            <div className="flex items-center gap-2">
+              <button
+                onClick={loadAdminData}
+                className="bg-slate-800 hover:bg-slate-700 text-amber-200 px-3 py-2 rounded-xl text-xs font-semibold flex items-center gap-1.5 border border-slate-700 transition-colors"
+              >
+                <RefreshCw className="w-3.5 h-3.5" />
+                <span>Actualiser les statuts</span>
+              </button>
+            </div>
+          </div>
+
+          {/* KPIs Règlements */}
+          <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
+            <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold uppercase">Total Adjudications</span>
+              <span className="font-mono text-xl font-bold text-slate-100">{ordersList.length}</span>
+            </div>
+            <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold uppercase">En attente sous 24h</span>
+              <span className="font-mono text-xl font-bold text-amber-400">
+                {ordersList.filter((o) => o.status === 'AWAITING_PAYMENT').length}
+              </span>
+            </div>
+            <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold uppercase">Encaissé / Réglé</span>
+              <span className="font-mono text-xl font-bold text-emerald-400">
+                {formatEuro(
+                  ordersList
+                    .filter((o) => ['PAID', 'SHIPPED', 'DELIVERED', 'PURCHASED', 'RECEIVED', 'READY_TO_SHIP'].includes(o.status))
+                    .reduce((acc, o) => acc + (o.totalCents || 0), 0)
+                )}
+              </span>
+            </div>
+            <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl p-3">
+              <span className="text-[10px] text-slate-400 block font-semibold uppercase">Défaillances / Transmis 2nd</span>
+              <span className="font-mono text-xl font-bold text-blue-400">
+                {ordersList.filter((o) => o.status === 'CANCELLED' || o.notes?.includes('candidat suivant')).length}
+              </span>
+            </div>
+          </div>
+
+          {/* Filters Bar */}
+          <div className="bg-[#1C2541]/80 p-4 rounded-xl border border-slate-800 flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="relative flex-1 min-w-[220px]">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Rechercher par N° commande, référence lot, acheteur, société..."
+                value={ordersSearch}
+                onChange={(e) => setOrdersSearch(e.target.value)}
+                className="w-full bg-[#0B132B] border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:border-amber-400"
+              />
+            </div>
+
+            <div className="flex items-center gap-2">
+              <select
+                value={ordersFilterStatus}
+                onChange={(e) => setOrdersFilterStatus(e.target.value)}
+                className="bg-[#0B132B] border border-slate-700 rounded-lg px-3 py-2 text-slate-200"
+              >
+                <option value="ALL">Tous les statuts</option>
+                <option value="AWAITING_PAYMENT">En attente de paiement (24h)</option>
+                <option value="PAID">Payé (En préparation)</option>
+                <option value="SHIPPED">Colis expédié</option>
+                <option value="DELIVERED">Livré</option>
+                <option value="CANCELLED">Annulé (Défaut de paiement)</option>
+              </select>
+            </div>
+          </div>
+
+          {/* Orders Table */}
+          {(() => {
+            const filteredOrders = ordersList.filter((o) => {
+              const matchesSearch =
+                !ordersSearch ||
+                o.orderNumber.toLowerCase().includes(ordersSearch.toLowerCase()) ||
+                (o.lot && o.lot.title && o.lot.title.toLowerCase().includes(ordersSearch.toLowerCase())) ||
+                (o.lot && o.lot.reference && o.lot.reference.toLowerCase().includes(ordersSearch.toLowerCase())) ||
+                (o.buyer && (
+                  (o.buyer.companyName && o.buyer.companyName.toLowerCase().includes(ordersSearch.toLowerCase())) ||
+                  (o.buyer.email && o.buyer.email.toLowerCase().includes(ordersSearch.toLowerCase())) ||
+                  (o.buyer.lastName && o.buyer.lastName.toLowerCase().includes(ordersSearch.toLowerCase()))
+                ));
+
+              const matchesStatus = ordersFilterStatus === 'ALL' || o.status === ordersFilterStatus;
+              return matchesSearch && matchesStatus;
+            });
+
+            if (filteredOrders.length === 0) {
+              return (
+                <div className="bg-[#1C2541]/50 border border-slate-800 rounded-xl p-8 text-center text-slate-400">
+                  <FileText className="w-8 h-8 mx-auto mb-2 text-slate-600" />
+                  <p>Aucune adjudication ou commande ne correspond à ces critères.</p>
+                </div>
+              );
+            }
+
+            return (
+              <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs">
+                    <thead className="bg-[#070B19] text-slate-400 uppercase text-[10px] font-semibold border-b border-slate-800">
+                      <tr>
+                        <th className="p-3">N° Bordereau / Date</th>
+                        <th className="p-3">Objet Adjugé</th>
+                        <th className="p-3">Adjudicataire (Professionnel)</th>
+                        <th className="p-3 text-right">Adjudication</th>
+                        <th className="p-3 text-right">Livraison</th>
+                        <th className="p-3 text-right">Total TTC</th>
+                        <th className="p-3">Statut Règlement</th>
+                        <th className="p-3 text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80 text-slate-300">
+                      {filteredOrders.map((o) => {
+                        const l = o.lot || {};
+                        const b = o.buyer || {};
+                        const isAwaiting = o.status === 'AWAITING_PAYMENT';
+                        const isPaid = ['PAID', 'SHIPPED', 'DELIVERED', 'PURCHASED', 'RECEIVED', 'READY_TO_SHIP'].includes(o.status);
+
+                        return (
+                          <tr key={o.id} className="hover:bg-slate-800/40 transition-colors">
+                            <td className="p-3 font-mono font-bold text-amber-400 whitespace-nowrap">
+                              <div>{o.orderNumber}</div>
+                              <span className="text-[10px] text-slate-400 font-sans font-normal">
+                                {o.createdAt ? new Date(o.createdAt).toLocaleDateString('fr-FR') : '—'}
+                              </span>
+                            </td>
+                            <td className="p-3">
+                              <div className="flex items-center gap-2">
+                                {l.images && (
+                                  <img
+                                    src={getLotPrimaryImage(l.images)}
+                                    alt=""
+                                    className="w-9 h-9 rounded object-cover border border-slate-700"
+                                  />
+                                )}
+                                <div>
+                                  <span className="font-mono text-[10px] text-amber-300/90 block">{l.reference}</span>
+                                  <span className="font-semibold text-slate-100 max-w-[180px] truncate block">{l.title}</span>
+                                </div>
+                              </div>
+                            </td>
+                            <td className="p-3">
+                              <div className="font-semibold text-slate-100">
+                                {b.companyName || `${b.firstName || ''} ${b.lastName || ''}`}
+                              </div>
+                              <div className="text-[11px] text-slate-400">{b.email}</div>
+                              <div className="text-[10px] text-slate-500">{b.city || 'France'} {b.phone ? `• ${b.phone}` : ''}</div>
+                            </td>
+                            <td className="p-3 text-right font-mono text-slate-200">
+                              {formatEuro(o.finalPriceCents)}
+                            </td>
+                            <td className="p-3 text-right font-mono text-slate-400 text-[11px]">
+                              {formatEuro(o.shippingCostCents)}
+                            </td>
+                            <td className="p-3 text-right font-mono font-bold text-[#D4AF37]">
+                              {formatEuro(o.totalCents)}
+                            </td>
+                            <td className="p-3">
+                              {isPaid ? (
+                                <span className="bg-emerald-950 text-emerald-300 border border-emerald-600/50 px-2 py-0.5 rounded text-[10px] font-bold">
+                                  PAYÉ
+                                </span>
+                              ) : isAwaiting ? (
+                                <div>
+                                  <span className="bg-amber-950 text-amber-300 border border-amber-600/50 px-2 py-0.5 rounded text-[10px] font-bold block w-fit mb-0.5">
+                                    À PAYER (24H)
+                                  </span>
+                                  <span className="text-[10px] text-amber-400/80 font-mono">
+                                    Délai en cours
+                                  </span>
+                                </div>
+                              ) : o.status === 'CANCELLED' ? (
+                                <span className="bg-rose-950 text-rose-300 border border-rose-600/50 px-2 py-0.5 rounded text-[10px] font-bold">
+                                  ANNULÉ / IMPAYÉ
+                                </span>
+                              ) : (
+                                <span className="bg-slate-900 text-slate-300 px-2 py-0.5 rounded text-[10px]">
+                                  {o.status}
+                                </span>
+                              )}
+                            </td>
+                            <td className="p-3 text-right">
+                              <div className="flex items-center justify-end gap-1.5">
+                                {isAwaiting && (
+                                  <>
+                                    <button
+                                      onClick={() => {
+                                        setManualPaymentModalItem(o);
+                                        setManualPaymentForm({
+                                          paymentMethod: 'Virement bancaire',
+                                          paymentReference: `VIR-${o.orderNumber}`,
+                                          notes: '',
+                                        });
+                                      }}
+                                      className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-2 py-1 rounded text-[10px] flex items-center gap-1 shadow cursor-pointer"
+                                      title="Valider la réception du règlement (Virement, Chèque, etc.)"
+                                    >
+                                      <Check className="w-3 h-3" />
+                                      <span>Valider règlement</span>
+                                    </button>
+                                    <button
+                                      onClick={() => handleOfferSecondBidder(o.lotId)}
+                                      className="bg-blue-600 hover:bg-blue-500 text-white font-bold px-2 py-1 rounded text-[10px] shadow cursor-pointer"
+                                      title="Transmettre au deuxième meilleur enchérisseur"
+                                    >
+                                      2nd enchérisseur
+                                    </button>
+                                  </>
+                                )}
+
+                                <button
+                                  onClick={() => setViewBordereauItem(o)}
+                                  className="bg-slate-800 hover:bg-slate-700 text-amber-200 border border-slate-700 px-2 py-1 rounded text-[10px] flex items-center gap-1 cursor-pointer"
+                                  title="Consulter et imprimer le bordereau d'adjudication officiel"
+                                >
+                                  <FileText className="w-3 h-3" />
+                                  <span>Bordereau</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
+      {/* 2d. LIVRE DE POLICE (RÉGLEMENTATION LÉGALE ART. 321-7 CODE PÉNAL) */}
+      {adminTab === 'police' && (
+        <div className="space-y-6">
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="bg-amber-950 text-amber-300 border border-amber-600/50 text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider font-mono">
+                  OBLIGATION LÉGALE — CODE PÉNAL ART. 321-7 & R. 321-1
+                </span>
+                <span className="text-emerald-400 text-xs font-semibold flex items-center gap-1">
+                  <ShieldCheck className="w-3.5 h-3.5" /> Registre conforme
+                </span>
+              </div>
+              <h2 className="text-xl font-serif font-bold text-amber-200 mt-1">
+                Livre de Police — Registre des Objets Mobiliers ({policeRegister.length})
+              </h2>
+              <p className="text-xs text-slate-400 mt-0.5">
+                Tenue séquentielle continue sans blanc ni rature des acquisitions, descriptions d'objets d'art, provenances et acquéreurs finaux.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                onClick={handleExportPoliceCSV}
+                className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 font-bold px-4 py-2.5 rounded-xl text-xs flex items-center gap-1.5 shadow-lg transition-all cursor-pointer"
+              >
+                <Download className="w-4 h-4" />
+                <span>Exporter le registre (CSV Conforme)</span>
+              </button>
+              <button
+                onClick={() => window.print()}
+                className="bg-slate-800 hover:bg-slate-700 text-amber-200 border border-slate-700 font-semibold px-3.5 py-2.5 rounded-xl text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+              >
+                <Printer className="w-4 h-4" />
+                <span>Imprimer</span>
+              </button>
+            </div>
+          </div>
+
+          {/* Search bar */}
+          <div className="bg-[#1C2541]/80 p-3.5 rounded-xl border border-slate-800 flex items-center justify-between gap-3 text-xs">
+            <div className="relative flex-1">
+              <Search className="w-4 h-4 text-slate-400 absolute left-3 top-1/2 -translate-y-1/2" />
+              <input
+                type="text"
+                placeholder="Rechercher par référence, désignation, provenance ou acquéreur..."
+                value={policeSearch}
+                onChange={(e) => setPoliceSearch(e.target.value)}
+                className="w-full bg-[#0B132B] border border-slate-700 rounded-lg pl-9 pr-3 py-2 text-slate-200 focus:outline-none focus:border-amber-400"
+              />
+            </div>
+            <span className="text-xs font-mono text-slate-400 hidden sm:inline">
+              Numérotation continue 1 à {policeRegister.length}
+            </span>
+          </div>
+
+          {/* Legal Register Table */}
+          {(() => {
+            const filteredPolice = policeRegister.filter((entry) => {
+              if (!policeSearch) return true;
+              const s = policeSearch.toLowerCase();
+              return (
+                entry.reference.toLowerCase().includes(s) ||
+                (entry.title && entry.title.toLowerCase().includes(s)) ||
+                (entry.description && entry.description.toLowerCase().includes(s)) ||
+                (entry.source && entry.source.toLowerCase().includes(s)) ||
+                (entry.buyerIdentity && entry.buyerIdentity.toLowerCase().includes(s))
+              );
+            });
+
+            return (
+              <div className="bg-[#1C2541]/70 border border-slate-800 rounded-xl overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left text-xs font-serif">
+                    <thead className="bg-[#070B19] text-amber-400/90 uppercase text-[10px] font-sans font-semibold border-b border-slate-800 tracking-wider">
+                      <tr>
+                        <th className="p-3 w-12 text-center">N° Ordre</th>
+                        <th className="p-3">Date Entrée</th>
+                        <th className="p-3">Réf. Lot</th>
+                        <th className="p-3 max-w-xs">Désignation précise & Caractéristiques</th>
+                        <th className="p-3">Provenance / Cédant</th>
+                        <th className="p-3 text-right">Coût achat / Est.</th>
+                        <th className="p-3">Date Sortie</th>
+                        <th className="p-3">Identité de l'Acquéreur</th>
+                        <th className="p-3 text-right">Prix Adjudication</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800/80 text-slate-300 text-[11px]">
+                      {filteredPolice.map((item) => (
+                        <tr key={item.lotId} className="hover:bg-slate-800/40">
+                          <td className="p-3 font-mono font-bold text-center text-amber-400">
+                            #{item.orderIndex}
+                          </td>
+                          <td className="p-3 font-mono text-slate-400 whitespace-nowrap">
+                            {item.entryDate ? new Date(item.entryDate).toLocaleDateString('fr-FR') : '—'}
+                          </td>
+                          <td className="p-3 font-mono font-bold text-slate-200 whitespace-nowrap">
+                            {item.reference}
+                          </td>
+                          <td className="p-3 leading-relaxed">
+                            <span className="font-sans font-bold text-slate-100 block">{item.title}</span>
+                            <span className="text-slate-400 text-[10px] line-clamp-2">{item.description}</span>
+                          </td>
+                          <td className="p-3 text-slate-300 italic">
+                            {item.source || 'Collection familiale'}
+                          </td>
+                          <td className="p-3 text-right font-mono text-slate-300">
+                            {formatEuro(item.actualCostCents > 0 ? item.actualCostCents : item.targetCostCents || item.startingPriceCents)}
+                          </td>
+                          <td className="p-3 font-mono text-slate-400 whitespace-nowrap">
+                            {item.exitDate ? new Date(item.exitDate).toLocaleDateString('fr-FR') : (item.saleDate && item.status === 'SOLD' ? new Date(item.saleDate).toLocaleDateString('fr-FR') : 'En stock')}
+                          </td>
+                          <td className="p-3">
+                            {item.buyerIdentity ? (
+                              <div>
+                                <span className="font-sans font-semibold text-emerald-300 block">
+                                  {item.buyerIdentity}
+                                </span>
+                                {item.buyerSiretVat && (
+                                  <span className="font-mono text-[9px] text-slate-400">
+                                    TVA: {item.buyerSiretVat}
+                                  </span>
+                                )}
+                              </div>
+                            ) : (
+                              <span className="text-slate-500 italic">Non adjugé</span>
+                            )}
+                          </td>
+                          <td className="p-3 text-right font-mono font-bold text-[#D4AF37]">
+                            {item.adjudicationPriceCents ? formatEuro(item.adjudicationPriceCents) : '—'}
+                          </td>
+                        </tr>
+                      ))}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
       {/* 4. ACQUISITIONS & TRÉSORERIE (Master Prompt Section 34, 76, 82) */}
       {adminTab === 'acquisitions' && (
         <div className="space-y-6">
@@ -2178,7 +3413,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                 </span>
               </label>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">Mise à prix (€) :</label>
                   <input
@@ -2192,7 +3427,7 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                         startingPriceCents: Math.round(parseFloat(e.target.value || '0') * 100),
                       })
                     }
-                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono"
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono text-slate-100"
                   />
                 </div>
 
@@ -2216,29 +3451,140 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
 
                 <div>
                   <label className="block text-slate-300 font-semibold mb-1">
-                    Coût estimé (€) [Interne] :
+                    Prix d'achat réel (€) [Admin seul] :
                   </label>
                   <input
                     type="number"
                     step="1"
-                    value={newLotForm.targetAcquisitionCostCents / 100}
+                    value={newLotForm.actualAcquisitionCostCents / 100}
                     onChange={(e) =>
                       setNewLotForm({
                         ...newLotForm,
-                        targetAcquisitionCostCents: Math.round(parseFloat(e.target.value || '0') * 100),
+                        actualAcquisitionCostCents: Math.round(parseFloat(e.target.value || '0') * 100),
                       })
                     }
-                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono"
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono text-emerald-300"
                   />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Statut initial :</label>
+                  <select
+                    value={newLotForm.status}
+                    onChange={(e) => setNewLotForm({ ...newLotForm, status: e.target.value as any })}
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 text-slate-200"
+                  >
+                    <option value="ACTIVE">En vente (Actif)</option>
+                    <option value="SCHEDULED">Programmé</option>
+                    <option value="DRAFT">Brouillon</option>
+                  </select>
                 </div>
               </div>
 
-              <div>
-                <label className="block text-slate-300 font-semibold mb-1">
-                  Photographies de l'objet (1 URL par ligne — Recommandé : 3, 6 ou 9 photos pour 1, 2 ou 3 rangées de 3 cases) :
-                </label>
+              {/* Calendrier de programmation bi-hebdomadaire (Mardi / Vendredi 10h-22h Europe/Brussels) */}
+              <div className="bg-[#0B132B]/80 border border-slate-800 p-3.5 rounded-xl space-y-3">
+                <div className="flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-xs font-semibold text-amber-300 uppercase tracking-wide">
+                      Programmation de la vente (Mardi ou Vendredi)
+                    </span>
+                    <span className="text-[10px] bg-slate-800 text-slate-400 px-2 py-0.5 rounded font-mono">
+                      Fuseau Europe/Brussels
+                    </span>
+                  </div>
+                  <span className="text-[11px] text-slate-400">
+                    Horaires par défaut : 10h00 → 22h00
+                  </span>
+                </div>
+
+                <div className="grid grid-cols-1 sm:grid-cols-4 gap-3 text-xs">
+                  <div>
+                    <label className="block text-slate-400 mb-1">Date de début :</label>
+                    <input
+                      type="date"
+                      value={newLotForm.startDate}
+                      onChange={(e) => setNewLotForm({ ...newLotForm, startDate: e.target.value })}
+                      className="w-full bg-[#1C2541] border border-slate-700 rounded-lg p-2 text-slate-200 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 mb-1">Heure de début :</label>
+                    <input
+                      type="time"
+                      value={newLotForm.startTime}
+                      onChange={(e) => setNewLotForm({ ...newLotForm, startTime: e.target.value })}
+                      className="w-full bg-[#1C2541] border border-slate-700 rounded-lg p-2 text-slate-200 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 mb-1">Date de fin :</label>
+                    <input
+                      type="date"
+                      value={newLotForm.endDate}
+                      onChange={(e) => setNewLotForm({ ...newLotForm, endDate: e.target.value })}
+                      className="w-full bg-[#1C2541] border border-slate-700 rounded-lg p-2 text-slate-200 font-mono"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-400 mb-1">Heure de fin :</label>
+                    <input
+                      type="time"
+                      value={newLotForm.endTime}
+                      onChange={(e) => setNewLotForm({ ...newLotForm, endTime: e.target.value })}
+                      className="w-full bg-[#1C2541] border border-slate-700 rounded-lg p-2 text-slate-200 font-mono"
+                    />
+                  </div>
+                </div>
+              </div>
+
+              {/* Gestion des photos avec import depuis l'ordinateur, aperçu, suppression et réordonnancement */}
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="block text-slate-300 font-semibold">
+                    Photographies de l'objet ({newLotForm.images.length}) :
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-colors shadow">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Importer des photos depuis mon ordinateur</span>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/avif"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        const files = e.target.files;
+                        if (!files || files.length === 0) return;
+                        Array.from(files).forEach((file) => {
+                          if (!file.type.startsWith('image/')) {
+                            alert(`Le fichier ${file.name} n'est pas une image supportée.`);
+                            return;
+                          }
+                          if (file.size > 5 * 1024 * 1024) {
+                            alert(`Le fichier ${file.name} dépasse 5 Mo.`);
+                            return;
+                          }
+                          const reader = new FileReader();
+                          reader.onload = (ev) => {
+                            const dataUrl = ev.target?.result as string;
+                            if (dataUrl) {
+                              setNewLotForm((prev) => ({
+                                ...prev,
+                                images: [...prev.images.filter((x) => !x.includes('photo-1615529328331')), dataUrl],
+                              }));
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        });
+                      }}
+                    />
+                  </label>
+                </div>
+
                 <textarea
-                  rows={4}
+                  rows={2}
                   value={newLotForm.images.join('\n')}
                   onChange={(e) => {
                     const urls = e.target.value
@@ -2247,28 +3593,76 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                       .filter(Boolean);
                     setNewLotForm({
                       ...newLotForm,
-                      images: urls.length > 0 ? urls : ['https://images.unsplash.com/photo-1615529328331-f8917597711f?auto=format&fit=crop&w=800&q=80'],
+                      images: urls.length > 0 ? urls : [],
                     });
                   }}
-                  placeholder="https://images.unsplash.com/...&#10;https://images.unsplash.com/...&#10;https://images.unsplash.com/..."
+                  placeholder="Ou collez ici une ou plusieurs URLs d'images (une par ligne)..."
                   className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono text-xs text-amber-200"
                 />
-                <p className="text-[11px] text-slate-400 mt-1">
-                  {newLotForm.images.length} photo(s) renseignée(s). Les photos s'afficheront en rangées de 3 cases photos par ligne sur la fiche de l'objet.
-                </p>
 
-                {/* Prévisualisation en grille de 3 cases par ligne */}
-                {newLotForm.images.length > 0 && (
-                  <div className="grid grid-cols-3 gap-2 mt-2 p-2 bg-[#0B132B] rounded-lg border border-slate-800">
+                {/* Prévisualisation avec boutons déplacer / supprimer */}
+                {newLotForm.images.length > 0 ? (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 p-3 bg-[#0B132B] rounded-xl border border-slate-800">
                     {newLotForm.images.map((imgUrl, i) => (
-                      <div key={i} className="aspect-square rounded overflow-hidden border border-slate-700 relative bg-black/60">
+                      <div key={i} className="aspect-square rounded-lg overflow-hidden border border-slate-700 relative bg-black/70 group">
                         <img src={imgUrl} alt="" className="w-full h-full object-cover" />
-                        <span className="absolute top-1 left-1 text-[9px] font-mono px-1 rounded bg-black/80 text-white">
-                          {i + 1}
+                        <span className="absolute top-1 left-1 text-[9px] font-mono px-1 rounded bg-black/80 text-white font-bold">
+                          #{i + 1}
                         </span>
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
+                          {i > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const arr = [...newLotForm.images];
+                                const temp = arr[i - 1];
+                                arr[i - 1] = arr[i];
+                                arr[i] = temp;
+                                setNewLotForm({ ...newLotForm, images: arr });
+                              }}
+                              className="p-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px]"
+                              title="Déplacer vers la gauche"
+                            >
+                              ◀
+                            </button>
+                          )}
+                          {i < newLotForm.images.length - 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const arr = [...newLotForm.images];
+                                const temp = arr[i + 1];
+                                arr[i + 1] = arr[i];
+                                arr[i] = temp;
+                                setNewLotForm({ ...newLotForm, images: arr });
+                              }}
+                              className="p-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px]"
+                              title="Déplacer vers la droite"
+                            >
+                              ▶
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setNewLotForm({
+                                ...newLotForm,
+                                images: newLotForm.images.filter((_, idx) => idx !== i),
+                              });
+                            }}
+                            className="p-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-[10px]"
+                            title="Supprimer cette photo"
+                          >
+                            ✕
+                          </button>
+                        </div>
                       </div>
                     ))}
                   </div>
+                ) : (
+                  <p className="text-[11px] text-slate-500 italic">
+                    Aucune photo importée pour le moment. Cliquez sur « Importer des photos depuis mon ordinateur » ci-dessus.
+                  </p>
                 )}
               </div>
 
@@ -2815,6 +4209,677 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                   className="bg-[#D4AF37] hover:bg-[#E5C158] disabled:opacity-50 text-slate-950 font-bold px-4 py-2 rounded-lg text-xs shadow cursor-pointer"
                 >
                   Valider l'ajout ({selectedLotsToAssign.length})
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: MODIFIER UN LOT EXISTANT */}
+      {editLotModalItem && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-3xl bg-[#1C2541] border border-amber-500/40 rounded-2xl p-6 shadow-2xl text-slate-200 max-h-[90vh] overflow-y-auto">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3 mb-4">
+              <div>
+                <span className="text-[10px] uppercase font-mono font-bold text-[#D4AF37] tracking-wider block">
+                  ÉDITION DE L'OBJET — {editLotForm.reference}
+                </span>
+                <h3 className="font-serif text-lg font-bold text-amber-200">
+                  Modifier la fiche du lot
+                </h3>
+              </div>
+              <button onClick={() => setEditLotModalItem(null)} className="text-slate-400 hover:text-white">
+                ✕
+              </button>
+            </div>
+
+            <form onSubmit={handleUpdateLot} className="space-y-4 text-xs">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Référence :</label>
+                  <input
+                    type="text"
+                    disabled
+                    value={editLotForm.reference}
+                    className="w-full bg-[#0B132B]/60 border border-slate-800 rounded-lg p-2 font-mono text-amber-400"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Catégorie :</label>
+                  <input
+                    type="text"
+                    required
+                    value={editLotForm.category}
+                    onChange={(e) => setEditLotForm({ ...editLotForm, category: e.target.value })}
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Époque :</label>
+                  <input
+                    type="text"
+                    value={editLotForm.period}
+                    onChange={(e) => setEditLotForm({ ...editLotForm, period: e.target.value })}
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-serif text-amber-200"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Titre de l'objet :</label>
+                <input
+                  type="text"
+                  required
+                  value={editLotForm.title}
+                  onChange={(e) => setEditLotForm({ ...editLotForm, title: e.target.value })}
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-serif text-amber-100"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Description détaillée :</label>
+                <textarea
+                  rows={3}
+                  required
+                  value={editLotForm.description}
+                  onChange={(e) => setEditLotForm({ ...editLotForm, description: e.target.value })}
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 leading-relaxed"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Dimensions :</label>
+                  <input
+                    type="text"
+                    value={editLotForm.dimensions}
+                    onChange={(e) => setEditLotForm({ ...editLotForm, dimensions: e.target.value })}
+                    placeholder="Ex: H: 45 cm, L: 30 cm"
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Poids du colis (détermine la grille de port) :</label>
+                  <input
+                    type="text"
+                    value={editLotForm.weight}
+                    onChange={(e) => setEditLotForm({ ...editLotForm, weight: e.target.value })}
+                    placeholder="Ex: 1.8 kg"
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono text-amber-300"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-4">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Rapport d'état & Authenticité :</label>
+                  <textarea
+                    rows={2}
+                    value={editLotForm.conditionReport}
+                    onChange={(e) => setEditLotForm({ ...editLotForm, conditionReport: e.target.value })}
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Traces d'usage & Défauts / Poinçons :</label>
+                  <textarea
+                    rows={2}
+                    value={editLotForm.flaws}
+                    onChange={(e) => setEditLotForm({ ...editLotForm, flaws: e.target.value })}
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Mise à prix (€) :</label>
+                  <input
+                    type="number"
+                    step="1"
+                    required
+                    value={editLotForm.startingPriceCents / 100}
+                    onChange={(e) =>
+                      setEditLotForm({
+                        ...editLotForm,
+                        startingPriceCents: Math.round(parseFloat(e.target.value || '0') * 100),
+                      })
+                    }
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Prix de réserve (€) [Secret] :</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={editLotForm.reservePriceCents / 100}
+                    onChange={(e) =>
+                      setEditLotForm({
+                        ...editLotForm,
+                        reservePriceCents: Math.round(parseFloat(e.target.value || '0') * 100),
+                      })
+                    }
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono text-amber-300"
+                  />
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Coût estimé (€) [Interne] :</label>
+                  <input
+                    type="number"
+                    step="1"
+                    value={editLotForm.targetAcquisitionCostCents / 100}
+                    onChange={(e) =>
+                      setEditLotForm({
+                        ...editLotForm,
+                        targetAcquisitionCostCents: Math.round(parseFloat(e.target.value || '0') * 100),
+                      })
+                    }
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Vente rattachée :</label>
+                  <select
+                    value={editLotForm.saleId || ''}
+                    onChange={(e) =>
+                      setEditLotForm({
+                        ...editLotForm,
+                        saleId: e.target.value ? parseInt(e.target.value) : null,
+                      })
+                    }
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 text-slate-200"
+                  >
+                    <option value="">Non rattaché (En stock)</option>
+                    {salesList.map((s) => (
+                      <option key={s.id} value={s.id}>
+                        {s.reference} — {s.saleDay === 'VENDREDI' ? 'Vendredi' : 'Mardi'} ({s.status})
+                      </option>
+                    ))}
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">Statut du lot :</label>
+                  <select
+                    value={editLotForm.status}
+                    onChange={(e) => setEditLotForm({ ...editLotForm, status: e.target.value })}
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 text-slate-200"
+                  >
+                    <option value="ACTIVE">ACTIVE (Enchères ouvertes)</option>
+                    <option value="DRAFT">DRAFT (Brouillon)</option>
+                    <option value="SCHEDULED">SCHEDULED (Programmé)</option>
+                    <option value="SOLD">SOLD (Adjugé / Vendu)</option>
+                    <option value="UNSOLD">UNSOLD (Invendu)</option>
+                  </select>
+                </div>
+              </div>
+
+              <div className="space-y-2">
+                <div className="flex flex-wrap items-center justify-between gap-2">
+                  <label className="block text-slate-300 font-semibold">
+                    Photographies de l'objet ({editLotForm.images.length}) :
+                  </label>
+                  <label className="inline-flex items-center gap-1.5 bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 px-3 py-1.5 rounded-lg text-xs font-bold cursor-pointer transition-colors shadow">
+                    <Upload className="w-3.5 h-3.5" />
+                    <span>Ajouter des photos depuis mon ordinateur</span>
+                    <input
+                      type="file"
+                      accept="image/jpeg,image/png,image/webp,image/avif"
+                      multiple
+                      className="hidden"
+                      onChange={(e) => {
+                        const files = e.target.files;
+                        if (!files || files.length === 0) return;
+                        Array.from(files).forEach((file) => {
+                          if (!file.type.startsWith('image/')) {
+                            alert(`Le fichier ${file.name} n'est pas une image supportée.`);
+                            return;
+                          }
+                          if (file.size > 5 * 1024 * 1024) {
+                            alert(`Le fichier ${file.name} dépasse 5 Mo.`);
+                            return;
+                          }
+                          const reader = new FileReader();
+                          reader.onload = (ev) => {
+                            const dataUrl = ev.target?.result as string;
+                            if (dataUrl) {
+                              setEditLotForm((prev: any) => ({
+                                ...prev,
+                                images: [...prev.images, dataUrl],
+                              }));
+                            }
+                          };
+                          reader.readAsDataURL(file);
+                        });
+                      }}
+                    />
+                  </label>
+                </div>
+
+                <textarea
+                  rows={2}
+                  value={editLotForm.images.join('\n')}
+                  onChange={(e) => {
+                    const urls = e.target.value
+                      .split('\n')
+                      .map((s) => s.trim())
+                      .filter(Boolean);
+                    setEditLotForm({ ...editLotForm, images: urls });
+                  }}
+                  placeholder="Ou collez ici une ou plusieurs URLs d'images..."
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono text-xs text-amber-200"
+                />
+
+                {/* Prévisualisation des photos avec réordonnancement et suppression */}
+                {editLotForm.images.length > 0 && (
+                  <div className="grid grid-cols-3 sm:grid-cols-4 md:grid-cols-6 gap-2 p-3 bg-[#0B132B] rounded-xl border border-slate-800">
+                    {editLotForm.images.map((imgUrl: string, i: number) => (
+                      <div key={i} className="aspect-square rounded-lg overflow-hidden border border-slate-700 relative bg-black/70 group">
+                        <img src={imgUrl} alt="" className="w-full h-full object-cover" />
+                        <span className="absolute top-1 left-1 text-[9px] font-mono px-1 rounded bg-black/80 text-white font-bold">
+                          #{i + 1}
+                        </span>
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-1">
+                          {i > 0 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const arr = [...editLotForm.images];
+                                const temp = arr[i - 1];
+                                arr[i - 1] = arr[i];
+                                arr[i] = temp;
+                                setEditLotForm({ ...editLotForm, images: arr });
+                              }}
+                              className="p-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px]"
+                              title="Déplacer vers la gauche"
+                            >
+                              ◀
+                            </button>
+                          )}
+                          {i < editLotForm.images.length - 1 && (
+                            <button
+                              type="button"
+                              onClick={() => {
+                                const arr = [...editLotForm.images];
+                                const temp = arr[i + 1];
+                                arr[i + 1] = arr[i];
+                                arr[i] = temp;
+                                setEditLotForm({ ...editLotForm, images: arr });
+                              }}
+                              className="p-1 bg-slate-800 hover:bg-slate-700 text-white rounded text-[10px]"
+                              title="Déplacer vers la droite"
+                            >
+                              ▶
+                            </button>
+                          )}
+                          <button
+                            type="button"
+                            onClick={() => {
+                              setEditLotForm({
+                                ...editLotForm,
+                                images: editLotForm.images.filter((_: any, idx: number) => idx !== i),
+                              });
+                            }}
+                            className="p-1 bg-rose-600 hover:bg-rose-500 text-white rounded text-[10px]"
+                            title="Supprimer cette photo"
+                          >
+                            ✕
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-3 flex justify-end gap-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setEditLotModalItem(null)}
+                  className="px-4 py-2 rounded-lg text-slate-400 hover:text-white"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 font-bold px-5 py-2 rounded-lg shadow cursor-pointer"
+                >
+                  Enregistrer les modifications
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: VALIDER MANUELLEMENT UN RÈGLEMENT */}
+      {manualPaymentModalItem && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-lg bg-[#1C2541] border border-emerald-500/40 rounded-2xl p-6 shadow-2xl text-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3 mb-4">
+              <div>
+                <span className="text-[10px] uppercase font-mono font-bold text-emerald-400 tracking-wider block">
+                  ENCAISSEMENT & CONFIRMATION DE RÈGLEMENT
+                </span>
+                <h3 className="font-serif text-lg font-bold text-slate-100">
+                  Valider le règlement — {manualPaymentModalItem.orderNumber}
+                </h3>
+              </div>
+              <button onClick={() => setManualPaymentModalItem(null)} className="text-slate-400 hover:text-white">
+                ✕
+              </button>
+            </div>
+
+            <div className="bg-[#0B132B] p-3 rounded-xl border border-slate-800 mb-4 text-xs space-y-1">
+              <div className="flex justify-between">
+                <span className="text-slate-400">Objet adjugé :</span>
+                <span className="font-semibold text-slate-200">{manualPaymentModalItem.lot?.title}</span>
+              </div>
+              <div className="flex justify-between">
+                <span className="text-slate-400">Adjudicataire :</span>
+                <span className="font-semibold text-slate-200">
+                  {manualPaymentModalItem.buyer?.companyName || `${manualPaymentModalItem.buyer?.firstName || ''} ${manualPaymentModalItem.buyer?.lastName || ''}`}
+                </span>
+              </div>
+              <div className="flex justify-between border-t border-slate-800 pt-1">
+                <span className="text-slate-400 font-bold">Montant total dû :</span>
+                <span className="font-mono font-bold text-amber-300 text-sm">
+                  {formatEuro(manualPaymentModalItem.totalCents)}
+                </span>
+              </div>
+            </div>
+
+            <form onSubmit={handleMarkOrderPaid} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Mode de règlement reçu :</label>
+                <select
+                  value={manualPaymentForm.paymentMethod}
+                  onChange={(e) => setManualPaymentForm({ ...manualPaymentForm, paymentMethod: e.target.value })}
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 text-slate-200"
+                >
+                  <option value="Virement bancaire">Virement bancaire (IBAN)</option>
+                  <option value="Chèque professionnel">Chèque professionnel vérifié</option>
+                  <option value="Carte bancaire / Terminal">Carte bancaire / Terminal physique</option>
+                  <option value="Espèces (Reçu direct)">Espèces (dans la limite légale autorisée)</option>
+                  <option value="PayPal Direct">PayPal Direct</option>
+                </select>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Référence du règlement (N° virement / chèque) :</label>
+                <input
+                  type="text"
+                  required
+                  placeholder="Ex: VIR-BNP-8849204"
+                  value={manualPaymentForm.paymentReference}
+                  onChange={(e) => setManualPaymentForm({ ...manualPaymentForm, paymentReference: e.target.value })}
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2 font-mono text-amber-300"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">Note comptable interne (Optionnelle) :</label>
+                <input
+                  type="text"
+                  placeholder="Ex: Fonds crédités sur compte bancaire professionnel"
+                  value={manualPaymentForm.notes}
+                  onChange={(e) => setManualPaymentForm({ ...manualPaymentForm, notes: e.target.value })}
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg p-2"
+                />
+              </div>
+
+              <div className="pt-3 flex justify-end gap-3 border-t border-slate-800">
+                <button
+                  type="button"
+                  onClick={() => setManualPaymentModalItem(null)}
+                  className="px-4 py-2 rounded-lg text-slate-400 hover:text-white"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-5 py-2 rounded-lg shadow cursor-pointer"
+                >
+                  Confirmer l'encaissement et générer le bordereau
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: BORDEREAU D'ADJUDICATION OFFICIEL (IMPRESSION & CONSULTATION) */}
+      {viewBordereauItem && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 overflow-y-auto animate-in fade-in">
+          <div className="bg-[#0B132B] border border-[#D4AF37]/60 rounded-2xl max-w-2xl w-full p-8 shadow-2xl text-slate-200 my-8 space-y-6">
+            <div className="flex items-start justify-between border-b border-slate-700 pb-4">
+              <div>
+                <span className="text-[10px] uppercase font-mono font-bold text-[#D4AF37] tracking-widest block">
+                  BORDEREAU D'ADJUDICATION & CONFIRMATION DE TRANSACTION
+                </span>
+                <h3 className="font-serif text-xl font-bold text-amber-100 mt-1">
+                  {viewBordereauItem.orderNumber}
+                </h3>
+                <span className="text-xs text-slate-400">
+                  Émis le {viewBordereauItem.createdAt ? new Date(viewBordereauItem.createdAt).toLocaleDateString('fr-FR') : new Date().toLocaleDateString('fr-FR')}
+                </span>
+              </div>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => window.print()}
+                  className="bg-slate-800 hover:bg-slate-700 text-amber-200 border border-slate-700 font-semibold px-3 py-1.5 rounded-lg text-xs flex items-center gap-1.5 transition-all cursor-pointer"
+                >
+                  <Printer className="w-3.5 h-3.5" />
+                  <span>Imprimer</span>
+                </button>
+                <button
+                  onClick={() => setViewBordereauItem(null)}
+                  className="text-slate-400 hover:text-white p-1 rounded-lg"
+                >
+                  ✕
+                </button>
+              </div>
+            </div>
+
+            {/* Parties : Vendeur & Acheteur */}
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-4 text-xs bg-[#1C2541]/70 p-4 rounded-xl border border-slate-800">
+              <div>
+                <span className="text-[10px] uppercase text-amber-400 font-mono font-bold block mb-1">
+                  VENDEUR
+                </span>
+                <p className="font-serif font-bold text-slate-100 text-sm">Monsieur De Coster</p>
+                <p className="text-slate-300">Vendeur particulier</p>
+                <p className="text-[10px] text-slate-400 mt-1 italic">
+                  Dispense de TVA (Article 293 B du CGI) — Vente d'objets personnels et de collection.
+                </p>
+              </div>
+
+              <div>
+                <span className="text-[10px] uppercase text-amber-400 font-mono font-bold block mb-1">
+                  ACQUÉREUR PROFESSIONNEL
+                </span>
+                <p className="font-bold text-slate-100 text-sm">
+                  {viewBordereauItem.buyer?.companyName || `${viewBordereauItem.buyer?.firstName || ''} ${viewBordereauItem.buyer?.lastName || ''}`}
+                </p>
+                <p className="text-slate-300">{viewBordereauItem.buyer?.email}</p>
+                <p className="text-slate-400">{viewBordereauItem.buyer?.addressLine1 || 'Adresse professionnelle'}</p>
+                <p className="text-slate-400">{viewBordereauItem.buyer?.postalCode} {viewBordereauItem.buyer?.city} ({viewBordereauItem.buyer?.country || 'France'})</p>
+                {viewBordereauItem.buyer?.vatNumber && (
+                  <p className="font-mono text-[10px] text-amber-300/80 mt-0.5">N° SIRET/TVA : {viewBordereauItem.buyer.vatNumber}</p>
+                )}
+              </div>
+            </div>
+
+            {/* Détail du lot */}
+            <div className="text-xs">
+              <span className="text-[10px] uppercase text-slate-400 font-mono font-bold block mb-2">
+                DÉSIGNATION DE L'OBJET ADJUGÉ
+              </span>
+              <div className="border border-slate-800 rounded-xl overflow-hidden">
+                <table className="w-full text-left">
+                  <thead className="bg-[#070B19] text-slate-400 uppercase text-[10px]">
+                    <tr>
+                      <th className="p-3">Réf. Lot</th>
+                      <th className="p-3">Description & Spécifications</th>
+                      <th className="p-3 text-right">Montant</th>
+                    </tr>
+                  </thead>
+                  <tbody className="divide-y divide-slate-800/80">
+                    <tr>
+                      <td className="p-3 font-mono font-bold text-amber-400 whitespace-nowrap align-top">
+                        {viewBordereauItem.lot?.reference || 'LOT-2026'}
+                      </td>
+                      <td className="p-3">
+                        <span className="font-bold text-slate-100 block">{viewBordereauItem.lot?.title}</span>
+                        <span className="text-slate-400 text-[11px] block mt-0.5">{viewBordereauItem.lot?.category} {viewBordereauItem.lot?.period ? `• ${viewBordereauItem.lot.period}` : ''}</span>
+                        <span className="text-slate-500 text-[10px] block mt-1">{viewBordereauItem.lot?.dimensions ? `Dimensions : ${viewBordereauItem.lot.dimensions}` : ''}</span>
+                      </td>
+                      <td className="p-3 text-right font-mono font-bold text-slate-100 align-top">
+                        {formatEuro(viewBordereauItem.finalPriceCents)}
+                      </td>
+                    </tr>
+                    <tr>
+                      <td className="p-3 font-mono text-slate-400" colSpan={2}>
+                        Frais d'emballage d'art et expédition sécurisée
+                      </td>
+                      <td className="p-3 text-right font-mono text-slate-300">
+                        {formatEuro(viewBordereauItem.shippingCostCents)}
+                      </td>
+                    </tr>
+                  </tbody>
+                  <tfoot className="bg-[#070B19] border-t-2 border-[#D4AF37]/50 font-bold">
+                    <tr>
+                      <td className="p-3 text-slate-200" colSpan={2}>
+                        TOTAL NET À RÉGLER (TTC) :
+                      </td>
+                      <td className="p-3 text-right font-mono text-lg text-[#D4AF37]">
+                        {formatEuro(viewBordereauItem.totalCents)}
+                      </td>
+                    </tr>
+                  </tfoot>
+                </table>
+              </div>
+            </div>
+
+            {/* Règlement statut */}
+            <div className="bg-[#1C2541]/70 p-3.5 rounded-xl border border-slate-800 text-xs flex items-center justify-between">
+              <div>
+                <span className="text-slate-400 block text-[10px] uppercase font-bold">STATUT DU PAIEMENT :</span>
+                <span className="font-bold text-emerald-400">
+                  {['PAID', 'SHIPPED', 'DELIVERED', 'PURCHASED', 'RECEIVED', 'READY_TO_SHIP'].includes(viewBordereauItem.status)
+                    ? 'ACQUITTÉ / PAYÉ INTÉGRALEMENT'
+                    : 'EN ATTENTE DE RÈGLEMENT (DÉLAI 24H)'}
+                </span>
+              </div>
+              <span className="font-mono text-[10px] text-slate-400">
+                Cabinet De Coster — Enchères Privées d'Antiquités
+              </span>
+            </div>
+
+            <div className="flex justify-end pt-2 border-t border-slate-800">
+              <button
+                type="button"
+                onClick={() => setViewBordereauItem(null)}
+                className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 font-bold px-5 py-2 rounded-xl text-xs cursor-pointer shadow"
+              >
+                Fermer
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: DOSSIER CLIENT PROFESSIONNEL & KYC */}
+      {clientDetailModalUser && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-xl bg-[#1C2541] border border-amber-500/40 rounded-2xl p-6 shadow-2xl text-slate-200">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3 mb-4">
+              <div>
+                <span className="text-[10px] uppercase font-mono font-bold text-[#D4AF37] tracking-wider block">
+                  DOSSIER PROFESSIONNEL & KYC
+                </span>
+                <h3 className="font-serif text-lg font-bold text-amber-200">
+                  {clientDetailModalUser.companyName || `${clientDetailModalUser.firstName || ''} ${clientDetailModalUser.lastName || ''}`}
+                </h3>
+              </div>
+              <button onClick={() => setClientDetailModalUser(null)} className="text-slate-400 hover:text-white">
+                ✕
+              </button>
+            </div>
+
+            <div className="space-y-4 text-xs">
+              <div className="grid grid-cols-2 gap-3 bg-[#0B132B] p-3.5 rounded-xl border border-slate-800">
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Activité :</span>
+                  <span className="font-semibold text-slate-200">{clientDetailModalUser.activity || 'Antiquaire / Brocanteur'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Pays d'exercice :</span>
+                  <span className="font-semibold text-slate-200">{clientDetailModalUser.country || 'France'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">N° SIRET / Kbis / TVA :</span>
+                  <span className="font-mono text-amber-300 font-bold">{clientDetailModalUser.vatNumber || 'Non renseigné'}</span>
+                </div>
+                <div>
+                  <span className="text-slate-400 block text-[10px]">Statut actuel :</span>
+                  <span className="font-bold text-emerald-400">{clientDetailModalUser.status}</span>
+                </div>
+              </div>
+
+              <div className="bg-[#0B132B] p-3.5 rounded-xl border border-slate-800 space-y-1">
+                <span className="text-slate-400 block text-[10px] uppercase font-bold mb-1">Coordonnées de contact :</span>
+                <p className="text-slate-300">Email : <span className="font-mono text-amber-200">{clientDetailModalUser.email}</span></p>
+                <p className="text-slate-300">Téléphone : <span className="font-mono text-slate-200">{clientDetailModalUser.phone || 'Non renseigné'}</span></p>
+                <p className="text-slate-300">
+                  Adresse : {clientDetailModalUser.addressLine1 || 'Non renseignée'} {clientDetailModalUser.postalCode} {clientDetailModalUser.city}
+                </p>
+              </div>
+
+              <div className="flex items-center justify-between pt-3 border-t border-slate-800">
+                <div className="flex gap-1.5">
+                  <button
+                    onClick={() => {
+                      handleClientStatusChange(clientDetailModalUser.id, 'APPROVED');
+                      setClientDetailModalUser(null);
+                    }}
+                    className="bg-emerald-600 hover:bg-emerald-500 text-white font-bold px-3 py-1.5 rounded-lg text-xs transition-colors cursor-pointer"
+                  >
+                    Agréer (APPROVED)
+                  </button>
+                  <button
+                    onClick={() => {
+                      handleClientStatusChange(clientDetailModalUser.id, 'SUSPENDED');
+                      setClientDetailModalUser(null);
+                    }}
+                    className="bg-amber-800 hover:bg-amber-700 text-amber-100 font-semibold px-3 py-1.5 rounded-lg text-xs transition-colors cursor-pointer"
+                  >
+                    Suspendre
+                  </button>
+                  <button
+                    onClick={() => {
+                      handleClientStatusChange(clientDetailModalUser.id, 'BLOCKED');
+                      setClientDetailModalUser(null);
+                    }}
+                    className="bg-rose-900 hover:bg-rose-800 text-rose-200 font-semibold px-3 py-1.5 rounded-lg text-xs transition-colors cursor-pointer"
+                  >
+                    Bloquer
+                  </button>
+                </div>
+
+                <button
+                  type="button"
+                  onClick={() => setClientDetailModalUser(null)}
+                  className="px-4 py-2 rounded-lg text-slate-400 hover:text-white"
+                >
+                  Fermer
                 </button>
               </div>
             </div>

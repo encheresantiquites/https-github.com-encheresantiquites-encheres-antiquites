@@ -150,7 +150,7 @@ export function formatSaleDateHeader(dateStr: string | Date): string {
 
 /**
  * Formate la plage horaire d'une vente
- * Ex: "10h00 → 20h00"
+ * Ex: "10h00 → 22h00"
  */
 export function formatSaleHours(startsAt: string | Date, endsAt: string | Date): string {
   const start = new Date(startsAt);
