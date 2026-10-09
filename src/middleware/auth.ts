@@ -2,7 +2,7 @@ import type { Request, Response, NextFunction } from 'express';
 import { adminAuth } from '../lib/firebase-admin.ts';
 import type { DecodedIdToken } from 'firebase-admin/auth';
 import { db, withDbRetry } from '../db/index.ts';
-import { users } from '../db/schema.ts';
+import { users, revokedSessions } from '../db/schema.ts';
 import { eq } from 'drizzle-orm';
 
 export interface AuthRequest extends Request {
@@ -16,15 +16,45 @@ export const requireAuth = async (
   next: NextFunction
 ) => {
   const authHeader = req.headers.authorization;
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  let token: string | undefined;
+
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.split('Bearer ')[1];
+  } else if ((req as any).cookies?.admin_session) {
+    token = (req as any).cookies.admin_session;
+  }
+
+  if (!token) {
     return res.status(401).json({ error: 'Non authentifié. Token manquant.' });
   }
 
-  const token = authHeader.split('Bearer ')[1];
   try {
-    // Mode email / mot de passe ou simulation
+    // Vérification d'invalidation/révocation de session (déconnexion explicite)
+    try {
+      const revoked = await withDbRetry(() =>
+        db.select().from(revokedSessions).where(eq(revokedSessions.token, token!)).limit(1)
+      );
+      if (revoked.length > 0) {
+        return res.status(401).json({ error: 'Session révoquée. Veuillez vous reconnecter.' });
+      }
+    } catch (revokedErr) {
+      // Ignorer si la table n'est pas encore disponible
+    }
+
+    // Mode email / mot de passe ou token de session
     if (token.startsWith('TOKEN_') || token.startsWith('SIMULATED_')) {
-      const email = Buffer.from(token.replace(/^(TOKEN_|SIMULATED_)/, ''), 'base64').toString('utf-8');
+      const rawToken = token.replace(/^(TOKEN_|SIMULATED_)/, '');
+      const parts = rawToken.split('_'); // support token_email_timestamp
+      const email = Buffer.from(parts[0], 'base64').toString('utf-8');
+
+      // Vérifier expiration si horodaté (24h de validité max)
+      if (parts.length > 1) {
+        const tokenTimestamp = parseInt(parts[1], 10);
+        if (!isNaN(tokenTimestamp) && Date.now() - tokenTimestamp > 24 * 3600 * 1000) {
+          return res.status(401).json({ error: 'Session expirée. Veuillez vous reconnecter.' });
+        }
+      }
+
       try {
         const matchingUsers = await withDbRetry(() => db.select().from(users).where(eq(users.email, email)));
         if (matchingUsers.length > 0) {

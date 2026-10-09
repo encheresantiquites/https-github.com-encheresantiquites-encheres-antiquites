@@ -25,7 +25,68 @@ export const DEFAULT_SCHEDULE_CONFIG: SaleScheduleConfig = {
 };
 
 /**
- * Calcule la date et heure d'une vente (Mardi ou Vendredi)
+ * Convertit une date et heure dans le fuseau officiel Europe/Brussels en Date UTC réelle
+ */
+export function createBrusselsDate(
+  year: number,
+  month: number,
+  day: number,
+  hour: number,
+  minute: number
+): Date {
+  const dummy = new Date(Date.UTC(year, month - 1, day, hour, minute));
+  const parts = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Brussels',
+    timeZoneName: 'longOffset',
+  }).formatToParts(dummy);
+  const offsetPart = parts.find((p) => p.type === 'timeZoneName')?.value;
+  const match = offsetPart?.match(/GMT([+-])(\d{2}):(\d{2})/);
+  const sign = match ? (match[1] === '+' ? -1 : 1) : 0;
+  const offH = match ? parseInt(match[2], 10) : 0;
+  const offM = match ? parseInt(match[3], 10) : 0;
+  return new Date(Date.UTC(year, month - 1, day, hour + sign * offH, minute + sign * offM));
+}
+
+/**
+ * Extrait les composantes calendaires actuelles dans le fuseau Europe/Brussels
+ */
+export function getBrusselsNowParts(refDate: Date = new Date()): {
+  year: number;
+  month: number;
+  day: number;
+  hour: number;
+  minute: number;
+  dayOfWeek: number;
+} {
+  const formatter = new Intl.DateTimeFormat('en-US', {
+    timeZone: 'Europe/Brussels',
+    year: 'numeric',
+    month: 'numeric',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: 'numeric',
+    second: 'numeric',
+    hour12: false,
+    weekday: 'short',
+  });
+  const parts = formatter.formatToParts(refDate);
+  const map: Record<string, string> = {};
+  for (const p of parts) map[p.type] = p.value;
+
+  const weekdayMap: Record<string, number> = { Sun: 0, Mon: 1, Tue: 2, Wed: 3, Thu: 4, Fri: 5, Sat: 6 };
+  return {
+    year: parseInt(map.year, 10),
+    month: parseInt(map.month, 10),
+    day: parseInt(map.day, 10),
+    hour: parseInt(map.hour, 10),
+    minute: parseInt(map.minute, 10),
+    dayOfWeek: weekdayMap[map.weekday] ?? refDate.getDay(),
+  };
+}
+
+/**
+ * Calcule la date et heure d'une vente (Mardi ou Vendredi) dans le fuseau Europe/Brussels
+ * Horaires par défaut officiels : 10h00 à 22h00
  * @param day 'MARDI' | 'VENDREDI'
  * @param fromDate Date de référence
  * @param openTime Heure d'ouverture (ex: "10:00")
@@ -38,29 +99,38 @@ export function calculateNextSaleDates(
   closeTime: string = '22:00'
 ): { startsAt: Date; endsAt: Date } {
   const targetDayOfWeek = day === 'MARDI' ? 2 : 5; // 2 = Mardi, 5 = Vendredi
-  const currentDayOfWeek = fromDate.getDay(); // 0 = Dimanche, 1 = Lundi, 2 = Mardi...
+  const bParts = getBrusselsNowParts(fromDate);
+  let daysUntil = (targetDayOfWeek - bParts.dayOfWeek + 7) % 7;
 
-  let daysUntil = (targetDayOfWeek - currentDayOfWeek + 7) % 7;
-  
   const [closeHour, closeMin] = closeTime.split(':').map(Number);
-  const candidateEnd = new Date(fromDate);
-  candidateEnd.setDate(fromDate.getDate() + daysUntil);
-  candidateEnd.setHours(closeHour || 22, closeMin || 0, 0, 0);
+  const targetDayEndCandidate = createBrusselsDate(
+    bParts.year,
+    bParts.month,
+    bParts.day + daysUntil,
+    closeHour || 22,
+    closeMin || 0
+  );
 
-  // Si le jour cible est aujourd'hui mais que l'heure de fin est déjà passée, reporter à la semaine suivante
-  if (daysUntil === 0 && candidateEnd.getTime() <= fromDate.getTime()) {
+  // Si le jour cible est aujourd'hui mais que l'heure de clôture (22h00) est passée, reporter à la semaine suivante
+  if (daysUntil === 0 && targetDayEndCandidate.getTime() <= fromDate.getTime()) {
     daysUntil = 7;
   }
 
   const [openHour, openMin] = openTime.split(':').map(Number);
-  
-  const startsAt = new Date(fromDate);
-  startsAt.setDate(fromDate.getDate() + daysUntil);
-  startsAt.setHours(openHour || 10, openMin || 0, 0, 0);
-
-  const endsAt = new Date(fromDate);
-  endsAt.setDate(fromDate.getDate() + daysUntil);
-  endsAt.setHours(closeHour || 22, closeMin || 0, 0, 0);
+  const startsAt = createBrusselsDate(
+    bParts.year,
+    bParts.month,
+    bParts.day + daysUntil,
+    openHour || 10,
+    openMin || 0
+  );
+  const endsAt = createBrusselsDate(
+    bParts.year,
+    bParts.month,
+    bParts.day + daysUntil,
+    closeHour || 22,
+    closeMin || 0
+  );
 
   return { startsAt, endsAt };
 }

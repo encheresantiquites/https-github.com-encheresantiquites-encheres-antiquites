@@ -77,9 +77,13 @@ export const lots = pgTable('lots', {
   currentWinnerId: integer('current_winner_id').references(() => users.id),
   secondWinnerId: integer('second_winner_id').references(() => users.id),
   secondBidAmountCents: integer('second_bid_amount_cents').default(0),
+  thirdWinnerId: integer('third_winner_id').references(() => users.id),
+  thirdBidAmountCents: integer('third_bid_amount_cents').default(0),
   paymentDueAt: timestamp('payment_due_at'),
   offeredToSecondAt: timestamp('offered_to_second_at'),
-  paymentStatus: text('payment_status').default('PENDING'), // 'PENDING' | 'AWAITING_PAYMENT' | 'PAID' | 'OVERDUE' | 'OFFERED_SECOND'
+  offeredToThirdAt: timestamp('offered_to_third_at'),
+  cascadeStep: integer('cascade_step').notNull().default(1), // 1 = 1er gagnant, 2 = 2ème enchérisseur, 3 = 3ème enchérisseur, 4 = impayé définitif
+  paymentStatus: text('payment_status').default('PENDING'), // 'PENDING' | 'AWAITING_PAYMENT' | 'PAID' | 'OVERDUE' | 'OFFERED_SECOND' | 'OFFERED_THIRD' | 'UNPAID'
   status: text('status').notNull().default('ACTIVE'), // 'DRAFT' | 'ACTIVE' | 'SOLD' | 'RESERVE_NOT_MET' | 'UNSOLD' | 'CANCELLED'
   endsAt: timestamp('ends_at').notNull(),
   images: json('images').$type<string[]>().default([]),
@@ -214,6 +218,36 @@ export const chatMessages = pgTable('chat_messages', {
   message: text('message').notNull(),
   isRead: boolean('is_read').notNull().default(false),
   createdAt: timestamp('created_at').defaultNow(),
+});
+
+// Registre financier automatique (Ligne financière unique par objet)
+export const financialRecords = pgTable('financial_records', {
+  id: serial('id').primaryKey(),
+  lotId: integer('lot_id').references(() => lots.id).notNull().unique(), // Ligne financière unique
+  reference: text('reference').notNull(),
+  title: text('title').notNull(),
+  acquisitionCostCents: integer('acquisition_cost_cents').notNull().default(0), // Prix d'achat réel (admin exclusif)
+  adjudicatedPriceCents: integer('adjudicated_price_cents'), // Prix de vente adjugé
+  finalPriceCents: integer('final_price_cents'), // Prix finalement retenu (après cascade éventuelle)
+  directCostsCents: integer('direct_costs_cents').notNull().default(0), // Frais d'achat / coûts directement imputables
+  paymentFeesCents: integer('payment_fees_cents').notNull().default(0), // Frais de paiement réellement supportés
+  collectedAmountCents: integer('collected_amount_cents').notNull().default(0), // Montant réellement encaissé (0 tant que non payé)
+  grossMarginCents: integer('gross_margin_cents').notNull().default(0), // Marge brute = prix retenu - prix achat
+  netMarginCents: integer('net_margin_cents').notNull().default(0), // Marge nette = prix retenu - prix achat - frais réels
+  financialStatus: text('financial_status').notNull().default('CATALOGUE'), // 'CATALOGUE' | 'EN_VENTE' | 'ADJUGE_ATTENTE' | 'PAYE_SOLDE' | 'CASCADE_ATTENTE' | 'IMPAYE' | 'INVENDU'
+  history: json('history').$type<any[]>().default([]),
+  notes: text('notes'),
+  createdAt: timestamp('created_at').defaultNow(),
+  updatedAt: timestamp('updated_at').defaultNow(),
+});
+
+// Sessions invalidées / révoquées (protection lors de la déconnexion)
+export const revokedSessions = pgTable('revoked_sessions', {
+  id: serial('id').primaryKey(),
+  token: text('token').notNull().unique(),
+  userId: integer('user_id').references(() => users.id),
+  revokedAt: timestamp('revoked_at').defaultNow(),
+  expiresAt: timestamp('expires_at').notNull(),
 });
 
 // Relationships

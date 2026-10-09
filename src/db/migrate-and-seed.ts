@@ -1,5 +1,6 @@
 import { createPool, isDbConfigured } from './index.ts';
 import { DEFAULT_LOTS } from '../data/default-lots.ts';
+import bcrypt from 'bcryptjs';
 
 const DDL_STATEMENTS = [
   `CREATE TABLE IF NOT EXISTS users (
@@ -210,6 +211,38 @@ const DDL_STATEMENTS = [
   `ALTER TABLE sales ADD COLUMN IF NOT EXISTS sale_day TEXT DEFAULT 'MARDI';`,
   `ALTER TABLE sales ADD COLUMN IF NOT EXISTS open_time TEXT DEFAULT '10:00';`,
   `ALTER TABLE sales ADD COLUMN IF NOT EXISTS close_time TEXT DEFAULT '22:00';`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS third_winner_id INTEGER;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS third_bid_amount_cents INTEGER DEFAULT 0;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS offered_to_third_at TIMESTAMP;`,
+  `ALTER TABLE lots ADD COLUMN IF NOT EXISTS cascade_step INTEGER DEFAULT 1;`,
+
+  `CREATE TABLE IF NOT EXISTS financial_records (
+    id SERIAL PRIMARY KEY,
+    lot_id INTEGER NOT NULL UNIQUE,
+    reference TEXT NOT NULL,
+    title TEXT NOT NULL,
+    acquisition_cost_cents INTEGER NOT NULL DEFAULT 0,
+    adjudicated_price_cents INTEGER,
+    final_price_cents INTEGER,
+    direct_costs_cents INTEGER NOT NULL DEFAULT 0,
+    payment_fees_cents INTEGER NOT NULL DEFAULT 0,
+    collected_amount_cents INTEGER NOT NULL DEFAULT 0,
+    gross_margin_cents INTEGER NOT NULL DEFAULT 0,
+    net_margin_cents INTEGER NOT NULL DEFAULT 0,
+    financial_status TEXT NOT NULL DEFAULT 'CATALOGUE',
+    history JSON DEFAULT '[]'::json,
+    notes TEXT,
+    created_at TIMESTAMP DEFAULT NOW(),
+    updated_at TIMESTAMP DEFAULT NOW()
+  );`,
+
+  `CREATE TABLE IF NOT EXISTS revoked_sessions (
+    id SERIAL PRIMARY KEY,
+    token TEXT NOT NULL UNIQUE,
+    user_id INTEGER,
+    revoked_at TIMESTAMP DEFAULT NOW(),
+    expires_at TIMESTAMP NOT NULL
+  );`,
 ];
 
 /**
@@ -284,7 +317,9 @@ export async function autoMigrateAndSeed(): Promise<boolean> {
     }
 
     // 2b. Initialiser le compte Administrateur initial (Monsieur De Coster)
-    const adminCheck = await client.query(`SELECT id FROM users WHERE uid = '14011981' OR email = 'admin@encheres-antiquites.fr' LIMIT 1`);
+    const adminCheck = await client.query(`SELECT id, password_hash FROM users WHERE uid = '14011981' OR email = 'admin@encheres-antiquites.fr' LIMIT 1`);
+    const initialAdminHash = bcrypt.hashSync('3030', 10);
+
     if (adminCheck.rows.length === 0) {
       await client.query(
         `INSERT INTO users (
@@ -300,7 +335,7 @@ export async function autoMigrateAndSeed(): Promise<boolean> {
           'ADMIN',
           'APPROVED',
           true,
-          'b74b7e3fcb623d805dacf98db27530f845760c47e3b0faa702b84e9ff3902c37', // SHA-256 de '3030'
+          initialAdminHash,
           'Monsieur',
           'De Coster',
           '14011981',
@@ -315,15 +350,19 @@ export async function autoMigrateAndSeed(): Promise<boolean> {
         ]
       );
     } else {
-      // S'assurer que le compte possède bien le rôle ADMIN et le hash correct
-      await client.query(
-        `UPDATE users SET
-          role = 'ADMIN',
-          status = 'APPROVED',
-          password_hash = 'b74b7e3fcb623d805dacf98db27530f845760c47e3b0faa702b84e9ff3902c37'
-        WHERE id = $1`,
-        [adminCheck.rows[0].id]
-      );
+      // S'assurer que le compte possède le rôle ADMIN sans écraser un mot de passe déjà modifié
+      const existingHash = adminCheck.rows[0].password_hash;
+      if (!existingHash) {
+        await client.query(
+          `UPDATE users SET role = 'ADMIN', status = 'APPROVED', password_hash = $1 WHERE id = $2`,
+          [initialAdminHash, adminCheck.rows[0].id]
+        );
+      } else {
+        await client.query(
+          `UPDATE users SET role = 'ADMIN', status = 'APPROVED' WHERE id = $1`,
+          [adminCheck.rows[0].id]
+        );
+      }
     }
 
     // 3. Initialiser le catalogue des 12 lots si la table est vide
@@ -371,6 +410,34 @@ export async function autoMigrateAndSeed(): Promise<boolean> {
       await client.query(`SELECT setval('lots_id_seq', (SELECT MAX(id) FROM lots))`);
       console.log('[Auto-DB] Lots et séquences initialisés avec succès.');
     }
+
+    // 3b. Initialiser les lignes financières uniques (registre financier) pour chaque lot
+    await client.query(`
+      INSERT INTO financial_records (
+        lot_id, reference, title, acquisition_cost_cents,
+        adjudicated_price_cents, final_price_cents, direct_costs_cents,
+        payment_fees_cents, collected_amount_cents, gross_margin_cents,
+        net_margin_cents, financial_status, history
+      )
+      SELECT 
+        l.id, l.reference, l.title,
+        COALESCE(l.actual_acquisition_cost_cents, l.target_acquisition_cost_cents, 0),
+        CASE WHEN l.status = 'SOLD' THEN l.current_price_cents ELSE NULL END,
+        CASE WHEN l.status = 'SOLD' THEN l.current_price_cents ELSE NULL END,
+        0, 0,
+        CASE WHEN l.payment_status = 'PAID' THEN l.current_price_cents ELSE 0 END,
+        CASE WHEN l.status = 'SOLD' THEN (l.current_price_cents - COALESCE(l.actual_acquisition_cost_cents, 0)) ELSE 0 END,
+        CASE WHEN l.status = 'SOLD' AND l.payment_status = 'PAID' THEN (l.current_price_cents - COALESCE(l.actual_acquisition_cost_cents, 0)) ELSE 0 END,
+        CASE 
+          WHEN l.payment_status = 'PAID' THEN 'PAYE_SOLDE'
+          WHEN l.status = 'SOLD' THEN 'ADJUGE_ATTENTE'
+          WHEN l.status = 'ACTIVE' THEN 'EN_VENTE'
+          ELSE 'CATALOGUE'
+        END,
+        '[]'::json
+      FROM lots l
+      ON CONFLICT (lot_id) DO NOTHING;
+    `);
 
     // 4. Paramètres généraux de la plateforme
     const settingsCheck = await client.query(`SELECT key FROM system_settings WHERE key = 'SELLER_NAME'`);

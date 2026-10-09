@@ -1,30 +1,29 @@
 import { db } from '../db/index.ts';
-import { lots, bids, bidHistory, users, auditLogs, orders, transactionDocuments, sales } from '../db/schema.ts';
+import { lots, bids, bidHistory, users, auditLogs, orders, transactionDocuments, sales, financialRecords } from '../db/schema.ts';
 import { eq, and, desc, asc, sql } from 'drizzle-orm';
 import { realtimeHub } from './realtime.ts';
 import { inMemoryAuctionStore } from './in-memory-store.ts';
 import { calculateShipping } from '../lib/shipping.ts';
-import { calculateNextSaleDates } from '../lib/sales-schedule.ts';
+import { calculateNextSaleDates, getBrusselsNowParts } from '../lib/sales-schedule.ts';
 
 /**
  * Règle du calendrier officiel de la plateforme :
  * Deux ventes privées par semaine : MARDI et VENDREDI.
  * Si un lot n'a pas reçu d'offre ou n'a pas atteint le prix de réserve,
  * il est automatiquement reprogrammé pour la prochaine vente officielle (Mardi ou Vendredi).
+ * Clôture automatique stricte à 22h00 Europe/Brussels.
  */
 export function getNextStandardLotSchedule(refDate: Date = new Date()): { startsAt: Date; endsAt: Date } {
-  const d = new Date(refDate);
-  const day = d.getDay(); // 0: Dimanche, 1: Lundi, 2: Mardi, 3: Mercredi, 4: Jeudi, 5: Vendredi, 6: Samedi
-  
-  // Si avant mardi soir 22h -> Vente du Mardi
-  // Si entre mardi 22h et vendredi 22h -> Vente du Vendredi
-  // Si après vendredi 22h -> Vente du Mardi suivant
+  const bParts = getBrusselsNowParts(refDate);
+  const day = bParts.dayOfWeek; // 0: Dim, 1: Lun, 2: Mar, 3: Mer, 4: Jeu, 5: Ven, 6: Sam
+  const hour = bParts.hour;
+
   let targetDay: 'MARDI' | 'VENDREDI' = 'MARDI';
-  if (day === 2 && d.getHours() >= 22) {
+  if (day === 2 && hour >= 22) {
     targetDay = 'VENDREDI';
   } else if (day === 3 || day === 4) {
     targetDay = 'VENDREDI';
-  } else if (day === 5 && d.getHours() >= 22) {
+  } else if (day === 5 && hour >= 22) {
     targetDay = 'MARDI';
   } else if (day === 5) {
     targetDay = 'VENDREDI';
@@ -32,7 +31,7 @@ export function getNextStandardLotSchedule(refDate: Date = new Date()): { starts
     targetDay = 'MARDI';
   }
 
-  return calculateNextSaleDates(targetDay, d);
+  return calculateNextSaleDates(targetDay, refDate);
 }
 
 /**
@@ -482,6 +481,63 @@ export async function closeExpiredLot(lotId: number): Promise<void> {
       })
       .returning();
 
+    // Enregistrement / mise à jour de la ligne financière unique de l'objet
+    const existingFin = await tx.select().from(financialRecords).where(eq(financialRecords.lotId, lot.id)).limit(1);
+    const acqCost = lot.actualAcquisitionCostCents || lot.targetAcquisitionCostCents || 0;
+    const adjPrice = lot.currentPriceCents;
+    const grossMargin = adjPrice - acqCost;
+    const directCosts = existingFin[0]?.directCostsCents || 0;
+    const netMargin = adjPrice - acqCost - directCosts;
+
+    if (existingFin.length === 0) {
+      await tx.insert(financialRecords).values({
+        lotId: lot.id,
+        reference: lot.reference,
+        title: lot.title,
+        acquisitionCostCents: acqCost,
+        adjudicatedPriceCents: adjPrice,
+        finalPriceCents: adjPrice,
+        directCostsCents: directCosts,
+        paymentFeesCents: 0,
+        collectedAmountCents: 0, // 0 tant que non payé
+        grossMarginCents: grossMargin,
+        netMarginCents: netMargin,
+        financialStatus: 'ADJUGE_ATTENTE',
+        history: [
+          {
+            timestamp: now.toISOString(),
+            event: 'ADJUDICATION',
+            adjudicatedPriceCents: adjPrice,
+            winnerId: lot.currentWinnerId,
+            notes: `Adjudication du lot à ${(adjPrice / 100).toFixed(2)} €. Délai strict de 24h pour le 1er enchérisseur.`,
+          },
+        ],
+      });
+    } else {
+      const history = Array.isArray(existingFin[0].history) ? [...existingFin[0].history] : [];
+      history.push({
+        timestamp: now.toISOString(),
+        event: 'ADJUDICATION',
+        adjudicatedPriceCents: adjPrice,
+        winnerId: lot.currentWinnerId,
+        notes: `Adjudication du lot à ${(adjPrice / 100).toFixed(2)} €. Délai strict de 24h pour le 1er enchérisseur.`,
+      });
+
+      await tx
+        .update(financialRecords)
+        .set({
+          adjudicatedPriceCents: adjPrice,
+          finalPriceCents: adjPrice,
+          collectedAmountCents: 0,
+          grossMarginCents: grossMargin,
+          netMarginCents: netMargin,
+          financialStatus: 'ADJUGE_ATTENTE',
+          history,
+          updatedAt: now,
+        })
+        .where(eq(financialRecords.id, existingFin[0].id));
+    }
+
     await tx.insert(auditLogs).values({
       action: 'CLOSE_LOT_SOLD',
       entityType: 'ORDER',
@@ -540,12 +596,13 @@ export async function offerLotToSecondBidder(lotId: number): Promise<{ success: 
       .orderBy(desc(sql`max(${bids.maxBidCents})`));
 
     const nextCandidate = candidateBids.find((b) => !excludedUserIds.has(b.userId));
+    const currentStep = Math.min(((lot as any).cascadeStep || 1) + 1, 4);
 
-    if (!nextCandidate) {
-      // Annuler la commande impayée en cours
+    if (currentStep > 3 || !nextCandidate) {
+      // Aucun enchérisseur suivant valide ou 3ème enchérisseur épuisé -> Impayé définitif
       await tx
         .update(orders)
-        .set({ status: 'CANCELLED', notes: 'Annulé pour défaut de paiement sous 24h - Aucun enchérisseur suivant' })
+        .set({ status: 'CANCELLED', notes: 'Annulé pour défaut de paiement sous 24h - Fin de la cascade (3 enchérisseurs épuisés)' })
         .where(and(eq(orders.lotId, lotId), eq(orders.status, 'AWAITING_PAYMENT')));
 
       await tx
@@ -557,22 +614,42 @@ export async function offerLotToSecondBidder(lotId: number): Promise<{ success: 
         })
         .where(eq(lots.id, lotId));
 
+      // Mettre à jour la ligne financière à IMPAYE
+      const finRec = await tx.select().from(financialRecords).where(eq(financialRecords.lotId, lotId)).limit(1);
+      if (finRec.length > 0) {
+        const history = Array.isArray(finRec[0].history) ? [...finRec[0].history] : [];
+        history.push({
+          timestamp: new Date().toISOString(),
+          event: 'CASCADE_EXHAUSTED_UNPAID',
+          notes: 'Défaut de paiement constaté après expiration du délai. Cascade épuisée (3 enchérisseurs). Lot marqué comme impayé.',
+        });
+
+        await tx.update(financialRecords).set({
+          financialStatus: 'IMPAYE',
+          collectedAmountCents: 0,
+          history,
+          updatedAt: new Date(),
+        }).where(eq(financialRecords.id, finRec[0].id));
+      }
+
       return {
         success: false,
-        message: 'Aucun deuxième ou prochain enchérisseur disponible pour ce lot.',
+        message: currentStep > 3
+          ? 'Les 3 meilleurs enchérisseurs ont été sollicités sans paiement. Le lot est désormais classé comme impayé.'
+          : 'Aucun enchérisseur suivant disponible pour ce lot. Le lot est classé comme impayé.',
       };
     }
 
     const now = new Date();
     const newPaymentDueAt = new Date(now.getTime() + 24 * 3600 * 1000); // 24h accordées au prochain enchérisseur
 
-    // Annuler la commande impayée en cours
+    // Annuler la commande impayée précédente
     await tx
       .update(orders)
-      .set({ status: 'CANCELLED', notes: 'Annulé pour défaut de paiement sous 24h - Transmis au candidat suivant' })
+      .set({ status: 'CANCELLED', notes: `Défaut de paiement sous 24h - Lot transféré au ${currentStep}e enchérisseur` })
       .where(and(eq(orders.lotId, lotId), eq(orders.status, 'AWAITING_PAYMENT')));
 
-    // Nouveau montant d'adjudication pour le prochain enchérisseur
+    // Nouveau montant d'adjudication pour le prochain enchérisseur (prix de son offre maximale)
     const finalPriceCents = Number(nextCandidate.maxBidCents);
     const shippingCalc = calculateShipping(lot.weight, {
       shippingQuoteRequired: Boolean((lot as any).shippingQuoteRequired),
@@ -581,7 +658,7 @@ export async function offerLotToSecondBidder(lotId: number): Promise<{ success: 
     const shippingCostCents = shippingCalc.costCents;
     const totalCents = finalPriceCents + shippingCostCents;
 
-    const rankSuffix = excludedUserIds.size === 1 ? '2ND' : `${excludedUserIds.size + 1}TH`;
+    const rankSuffix = currentStep === 2 ? '2ND' : '3RD';
     const orderNumber = `CMD-${now.getFullYear()}-${String(lot.id).padStart(4, '0')}-${rankSuffix}`;
 
     await tx.insert(orders).values({
@@ -592,28 +669,70 @@ export async function offerLotToSecondBidder(lotId: number): Promise<{ success: 
       shippingCostCents,
       totalCents,
       status: 'AWAITING_PAYMENT',
-      notes: `Attribué à l'enchérisseur suivant (ID ${nextCandidate.userId}) suite au défaut de paiement.`,
+      notes: `Attribué au ${currentStep}e enchérisseur (ID ${nextCandidate.userId}) suite au défaut de paiement précédent.`,
     });
 
     // Mettre à jour le lot
-    await tx
-      .update(lots)
-      .set({
-        currentWinnerId: nextCandidate.userId,
-        currentPriceCents: finalPriceCents,
-        paymentStatus: 'OFFERED_SECOND',
-        offeredToSecondAt: now,
-        paymentDueAt: newPaymentDueAt,
+    const lotUpdateData: any = {
+      currentWinnerId: nextCandidate.userId,
+      currentPriceCents: finalPriceCents,
+      cascadeStep: currentStep,
+      paymentDueAt: newPaymentDueAt,
+      updatedAt: now,
+    };
+    if (currentStep === 2) {
+      lotUpdateData.paymentStatus = 'OFFERED_SECOND';
+      lotUpdateData.offeredToSecondAt = now;
+      lotUpdateData.secondWinnerId = nextCandidate.userId;
+      lotUpdateData.secondBidAmountCents = finalPriceCents;
+    } else {
+      lotUpdateData.paymentStatus = 'OFFERED_THIRD';
+      lotUpdateData.offeredToThirdAt = now;
+      lotUpdateData.thirdWinnerId = nextCandidate.userId;
+      lotUpdateData.thirdBidAmountCents = finalPriceCents;
+    }
+
+    await tx.update(lots).set(lotUpdateData).where(eq(lots.id, lotId));
+
+    // Mettre à jour la ligne financière unique du lot (conserve le prix adjugé initial et actualise le prix finalement retenu)
+    const finRec = await tx.select().from(financialRecords).where(eq(financialRecords.lotId, lotId)).limit(1);
+    if (finRec.length > 0) {
+      const f = finRec[0];
+      const acqCost = f.acquisitionCostCents || 0;
+      const directCosts = f.directCostsCents || 0;
+      const paymentFees = f.paymentFeesCents || 0;
+      const grossMargin = finalPriceCents - acqCost;
+      const netMargin = finalPriceCents - acqCost - directCosts - paymentFees;
+
+      const history = Array.isArray(f.history) ? [...f.history] : [];
+      history.push({
+        timestamp: now.toISOString(),
+        event: 'CASCADE_TRANSFER',
+        cascadeStep: currentStep,
+        previousPriceCents: lot.currentPriceCents,
+        newFinalPriceCents: finalPriceCents,
+        newBuyerId: nextCandidate.userId,
+        paymentDueAt: newPaymentDueAt.toISOString(),
+        notes: `Transfert du lot au ${currentStep}e enchérisseur à ${(finalPriceCents / 100).toFixed(2)} € suite à impayé sous 24h. Nouveau délai accordé de 24h.`,
+      });
+
+      await tx.update(financialRecords).set({
+        finalPriceCents,
+        grossMarginCents: grossMargin,
+        netMarginCents: netMargin,
+        financialStatus: 'CASCADE_ATTENTE',
+        collectedAmountCents: 0, // 0 tant que non payé
+        history,
         updatedAt: now,
-      })
-      .where(eq(lots.id, lotId));
+      }).where(eq(financialRecords.id, f.id));
+    }
 
     // Audit log
     await tx.insert(auditLogs).values({
       action: 'OFFER_TO_NEXT_BIDDER',
       entityType: 'LOT',
       entityId: lot.reference,
-      details: `Lot ${lot.reference} réattribué au candidat suivant (ID ${nextCandidate.userId}) pour ${(finalPriceCents / 100).toFixed(2)} €. Commande ${orderNumber} créée (délai 24h).`,
+      details: `Lot ${lot.reference} réattribué au ${currentStep}e enchérisseur (ID ${nextCandidate.userId}) pour ${(finalPriceCents / 100).toFixed(2)} €. Commande ${orderNumber} créée (nouveau délai 24h).`,
     });
 
     // Notification ciblée au bénéficiaire suivant
@@ -631,7 +750,7 @@ export async function offerLotToSecondBidder(lotId: number): Promise<{ success: 
 
     return {
       success: true,
-      message: `Le lot ${lot.reference} a été proposé avec succès à l'enchérisseur suivant pour ${(finalPriceCents / 100).toFixed(2)} € (délai 24h accordé).`,
+      message: `Le lot ${lot.reference} a été proposé avec succès au ${currentStep}e enchérisseur pour ${(finalPriceCents / 100).toFixed(2)} € (nouveau délai 24h accordé).`,
     };
   });
 }

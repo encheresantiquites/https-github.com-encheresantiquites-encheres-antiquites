@@ -36,6 +36,10 @@ import {
   ShieldCheck,
   BookOpen,
   Upload,
+  Landmark,
+  Lock,
+  History,
+  Calculator,
 } from 'lucide-react';
 import { DEFAULT_SHIPPING_TIERS, calculateShipping } from '../lib/shipping.ts';
 import {
@@ -52,7 +56,7 @@ interface AdminBackofficeProps {
 export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
   const { token } = useAuth();
   const [adminTab, setAdminTab] = useState<
-    'dashboard' | 'lots' | 'sales' | 'ended_sales' | 'orders' | 'police' | 'clients' | 'messages' | 'acquisitions' | 'shipments' | 'audit' | 'settings'
+    'dashboard' | 'lots' | 'sales' | 'ended_sales' | 'orders' | 'finances' | 'police' | 'clients' | 'messages' | 'acquisitions' | 'shipments' | 'audit' | 'settings'
   >('dashboard');
 
   const [loading, setLoading] = useState(true);
@@ -73,6 +77,25 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
   const [selectedLotFilter, setSelectedLotFilter] = useState<string>('ALL');
   const [unreadOnlyFilter, setUnreadOnlyFilter] = useState<boolean>(false);
   const [previewLot, setPreviewLot] = useState<Lot | null>(null);
+
+  // Registre financier automatique (Priorité 2)
+  const [financialRecords, setFinancialRecords] = useState<any[]>([]);
+  const [financesSummary, setFinancesSummary] = useState<any>(null);
+  const [financesSearch, setFinancesSearch] = useState('');
+  const [financesFilterStatus, setFinancesFilterStatus] = useState<string>('ALL');
+  const [editFinanceModalItem, setEditFinanceModalItem] = useState<any | null>(null);
+  const [viewFinanceHistoryItem, setViewFinanceHistoryItem] = useState<any | null>(null);
+  const [savingFinance, setSavingFinance] = useState(false);
+
+  // Sécurité Administrateur (Changement mot de passe)
+  const [adminPasswordForm, setAdminPasswordForm] = useState({
+    currentPassword: '',
+    newPassword: '',
+    confirmPassword: '',
+  });
+  const [passwordChangeMessage, setPasswordChangeMessage] = useState<string | null>(null);
+  const [passwordChangeError, setPasswordChangeError] = useState<string | null>(null);
+  const [passwordLoading, setPasswordLoading] = useState(false);
 
   // Filters & Search
   const [clientSearch, setClientSearch] = useState('');
@@ -284,6 +307,14 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
       if (policeRes.ok) {
         const d = await policeRes.json();
         setPoliceRegister(d.register || []);
+      }
+
+      // 11. Registre financier automatique (Priorité 2)
+      const finRes = await fetch('/api/admin/finances', { headers });
+      if (finRes.ok) {
+        const d = await finRes.json();
+        setFinancialRecords(d.records || []);
+        setFinancesSummary(d.summary || null);
       }
     } catch (err) {
       console.error('Erreur chargement données administration:', err);
@@ -511,6 +542,78 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
       }
     } catch (e) {
       console.error(e);
+    }
+  };
+
+  // Enregistrer les modifications financières (frais d'achat, coûts directs, frais de paiement)
+  const handleSaveFinance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editFinanceModalItem || !token) return;
+    setSavingFinance(true);
+    try {
+      const res = await fetch(`/api/admin/finances/${editFinanceModalItem.id}`, {
+        method: 'PUT',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          acquisitionCostCents: Math.round(parseFloat(editFinanceModalItem.acquisitionCostEuros || '0') * 100),
+          directCostsCents: Math.round(parseFloat(editFinanceModalItem.directCostsEuros || '0') * 100),
+          paymentFeesCents: Math.round(parseFloat(editFinanceModalItem.paymentFeesEuros || '0') * 100),
+          notes: editFinanceModalItem.notes,
+        }),
+      });
+      if (res.ok) {
+        setEditFinanceModalItem(null);
+        await loadAdminData();
+      }
+    } catch (err) {
+      console.error('Erreur mise à jour financière:', err);
+    } finally {
+      setSavingFinance(false);
+    }
+  };
+
+  // Changement sécurisé de mot de passe administrateur
+  const handleChangeAdminPassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPasswordChangeMessage(null);
+    setPasswordChangeError(null);
+
+    if (adminPasswordForm.newPassword !== adminPasswordForm.confirmPassword) {
+      setPasswordChangeError('Les deux nouveaux mots de passe ne correspondent pas.');
+      return;
+    }
+    if (adminPasswordForm.newPassword.length < 6) {
+      setPasswordChangeError('Le nouveau mot de passe doit comporter au moins 6 caractères.');
+      return;
+    }
+
+    setPasswordLoading(true);
+    try {
+      const res = await fetch('/api/admin/change-password', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${token}`,
+        },
+        body: JSON.stringify({
+          currentPassword: adminPasswordForm.currentPassword,
+          newPassword: adminPasswordForm.newPassword,
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        setPasswordChangeError(data.error || 'Erreur lors du changement de mot de passe.');
+      } else {
+        setPasswordChangeMessage('Votre mot de passe administrateur a été mis à jour avec succès (hachage bcrypt sécurisé).');
+        setAdminPasswordForm({ currentPassword: '', newPassword: '', confirmPassword: '' });
+      }
+    } catch (err: any) {
+      setPasswordChangeError('Une erreur réseau est survenue.');
+    } finally {
+      setPasswordLoading(false);
     }
   };
 
@@ -854,6 +957,23 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
           {ordersList.filter((o) => o.status === 'AWAITING_PAYMENT').length > 0 && (
             <span className="bg-amber-500 text-slate-950 text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold animate-pulse">
               {ordersList.filter((o) => o.status === 'AWAITING_PAYMENT').length} à payer
+            </span>
+          )}
+        </button>
+
+        <button
+          onClick={() => setAdminTab('finances')}
+          className={`flex items-center gap-2 px-3.5 py-2 rounded-xl text-xs font-bold transition-all ${
+            adminTab === 'finances'
+              ? 'bg-[#D4AF37] text-slate-950 shadow-md'
+              : 'bg-slate-900/80 text-slate-300 hover:bg-slate-800'
+          }`}
+        >
+          <Landmark className="w-4 h-4" />
+          <span>Registre Financier</span>
+          {financialRecords.length > 0 && (
+            <span className="bg-slate-800 text-amber-300 text-[10px] px-1.5 py-0.2 rounded-full font-mono font-bold">
+              {financialRecords.length}
             </span>
           )}
         </button>
@@ -2819,6 +2939,391 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
         </div>
       )}
 
+      {/* 2c-bis. REGISTRE FINANCIER AUTOMATIQUE & MARGES (Section 2 - Priorité 2) */}
+      {adminTab === 'finances' && (
+        <div className="space-y-6">
+          {/* En-tête officiel du Registre Financier */}
+          <div className="flex flex-wrap items-center justify-between gap-4">
+            <div>
+              <div className="flex items-center gap-2">
+                <span className="bg-amber-950 text-amber-300 border border-amber-600/50 text-[10px] font-bold px-2.5 py-0.5 rounded-full uppercase tracking-wider font-mono">
+                  GESTION COMMERCIALE & COMPTABLE
+                </span>
+                <span className="bg-emerald-950 text-emerald-300 border border-emerald-600/50 text-[10px] font-bold px-2 py-0.5 rounded-full font-mono">
+                  LIGNE UNIQUE PAR OBJET
+                </span>
+              </div>
+              <h2 className="text-xl font-serif font-bold text-amber-200 mt-1 flex items-center gap-2">
+                <Landmark className="w-6 h-6 text-[#D4AF37]" />
+                <span>Registre Financier & Marges Opérationnelles</span>
+              </h2>
+              <p className="text-xs text-slate-400 mt-1 max-w-3xl leading-relaxed">
+                Chaque objet dispose d'une ligne financière unique générée automatiquement. Le prix d'achat réel est visible exclusivement par l'administrateur. Les ventes adjugées mais non payées ne sont jamais comptabilisées comme encaissements réels.
+              </p>
+            </div>
+
+            <div className="flex flex-wrap items-center gap-3">
+              <button
+                onClick={() => loadAdminData()}
+                className="flex items-center gap-2 bg-[#1C2541] hover:bg-slate-800 text-slate-200 border border-slate-700 px-3.5 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer"
+              >
+                <RefreshCw className="w-4 h-4" />
+                <span>Actualiser les calculs</span>
+              </button>
+            </div>
+          </div>
+
+          {/* FORMULES OFFICIELLES RAPPELÉES */}
+          <div className="bg-[#1C2541]/50 border border-slate-800 p-3.5 rounded-xl flex flex-wrap items-center justify-between gap-3 text-xs">
+            <div className="flex items-center gap-2 text-slate-300">
+              <Calculator className="w-4 h-4 text-amber-400" />
+              <span className="font-semibold text-amber-300">Formules officielles appliquées :</span>
+            </div>
+            <div className="flex flex-wrap items-center gap-4 text-[11px] font-mono">
+              <span className="bg-slate-900 border border-slate-700 px-2.5 py-1 rounded-lg text-slate-200">
+                Marge brute = Prix de vente retenu − Prix d'achat
+              </span>
+              <span className="bg-slate-900 border border-slate-700 px-2.5 py-1 rounded-lg text-slate-200">
+                Marge nette = Prix de vente retenu − Prix d'achat − Frais réels
+              </span>
+            </div>
+          </div>
+
+          {/* 7 KPI CARDS OFFICIELLES */}
+          <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-7 gap-3">
+            {/* 1. PRIX D'ACHAT RÉEL */}
+            <div className="bg-[#1C2541] border border-slate-800 p-4 rounded-xl space-y-1">
+              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase font-bold tracking-wider">
+                <span>Achats Réels</span>
+                <Lock className="w-3.5 h-3.5 text-amber-400" />
+              </div>
+              <div className="font-mono text-base lg:text-lg font-black text-amber-200">
+                {(((financesSummary?.totalAcquisitionCostCents || 0)) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+              </div>
+              <div className="text-[10px] text-amber-400/80 font-mono">Admin exclusif</div>
+            </div>
+
+            {/* 2. PRIX ADJUGÉ */}
+            <div className="bg-[#1C2541] border border-slate-800 p-4 rounded-xl space-y-1">
+              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase font-bold tracking-wider">
+                <span>Prix Adjugé</span>
+                <Gavel className="w-3.5 h-3.5 text-blue-400" />
+              </div>
+              <div className="font-mono text-base lg:text-lg font-bold text-blue-200">
+                {(((financesSummary?.totalAdjudicatedPriceCents || 0)) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+              </div>
+              <div className="text-[10px] text-slate-400">Enchères initiales</div>
+            </div>
+
+            {/* 3. PRIX RETENU */}
+            <div className="bg-[#1C2541] border border-slate-800 p-4 rounded-xl space-y-1">
+              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase font-bold tracking-wider">
+                <span>Prix Retenu</span>
+                <DollarSign className="w-3.5 h-3.5 text-amber-400" />
+              </div>
+              <div className="font-mono text-base lg:text-lg font-bold text-amber-300">
+                {(((financesSummary?.totalFinalPriceCents || 0)) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+              </div>
+              <div className="text-[10px] text-amber-400/80">Après cascade</div>
+            </div>
+
+            {/* 4. FRAIS DIRECTS & PAIEMENT */}
+            <div className="bg-[#1C2541] border border-slate-800 p-4 rounded-xl space-y-1">
+              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase font-bold tracking-wider">
+                <span>Frais Réels</span>
+                <Coins className="w-3.5 h-3.5 text-rose-400" />
+              </div>
+              <div className="font-mono text-base lg:text-lg font-bold text-rose-300">
+                {((((financesSummary?.totalDirectCostsCents || 0) + (financesSummary?.totalPaymentFeesCents || 0))) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+              </div>
+              <div className="text-[10px] text-slate-400">Coûts + commissions</div>
+            </div>
+
+            {/* 5. ENCAISSÉ RÉEL */}
+            <div className="bg-[#1C2541] border border-emerald-500/50 bg-emerald-950/20 p-4 rounded-xl space-y-1">
+              <div className="flex items-center justify-between text-emerald-400 text-[10px] uppercase font-bold tracking-wider">
+                <span>Encaissé Réel</span>
+                <CheckCircle2 className="w-3.5 h-3.5 text-emerald-400" />
+              </div>
+              <div className="font-mono text-base lg:text-lg font-black text-emerald-300">
+                {(((financesSummary?.totalCollectedAmountCents || 0)) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+              </div>
+              <div className="text-[10px] text-emerald-400/80">{financesSummary?.collectedCount || 0} ventes soldées</div>
+            </div>
+
+            {/* 6. MARGE BRUTE */}
+            <div className="bg-[#1C2541] border border-slate-800 p-4 rounded-xl space-y-1">
+              <div className="flex items-center justify-between text-slate-400 text-[10px] uppercase font-bold tracking-wider">
+                <span>Marge Brute</span>
+                <TrendingUp className="w-3.5 h-3.5 text-amber-300" />
+              </div>
+              <div className="font-mono text-base lg:text-lg font-black text-amber-200">
+                {(((financesSummary?.totalGrossMarginCents || 0)) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+              </div>
+              <div className="text-[10px] text-slate-400">Retenu − Achat</div>
+            </div>
+
+            {/* 7. MARGE NETTE OPÉRATIONNELLE */}
+            <div className="bg-[#1C2541] border border-[#D4AF37]/50 bg-[#D4AF37]/5 p-4 rounded-xl space-y-1">
+              <div className="flex items-center justify-between text-[#D4AF37] text-[10px] uppercase font-bold tracking-wider">
+                <span>Marge Nette</span>
+                <ShieldCheck className="w-3.5 h-3.5 text-[#D4AF37]" />
+              </div>
+              <div className="font-mono text-base lg:text-lg font-black text-[#D4AF37]">
+                {(((financesSummary?.totalNetMarginCents || 0)) / 100).toLocaleString('fr-FR', { minimumFractionDigits: 2 })} €
+              </div>
+              <div className="text-[10px] text-amber-300/80 font-mono">
+                {financesSummary?.totalFinalPriceCents > 0
+                  ? `${Math.round(((financesSummary?.totalNetMarginCents || 0) / financesSummary.totalFinalPriceCents) * 100)} % taux net`
+                  : 'Opérationnelle'}
+              </div>
+            </div>
+          </div>
+
+          {/* BARRE DE RECHERCHE ET FILTRES STATUT */}
+          <div className="bg-[#1C2541]/70 p-4 rounded-xl border border-slate-800 space-y-3">
+            <div className="flex flex-wrap items-center justify-between gap-3">
+              <div className="relative flex-1 min-w-[240px]">
+                <Search className="w-4 h-4 absolute left-3 top-2.5 text-slate-500" />
+                <input
+                  type="text"
+                  placeholder="Rechercher par référence, titre d'objet..."
+                  value={financesSearch}
+                  onChange={(e) => setFinancesSearch(e.target.value)}
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg pl-9 pr-3 py-1.5 text-xs text-slate-200 placeholder-slate-500 focus:outline-none focus:border-[#D4AF37]"
+                />
+              </div>
+
+              {/* Filtres par statut financier */}
+              <div className="flex flex-wrap items-center gap-1.5 text-[11px]">
+                {[
+                  { id: 'ALL', label: 'Tous' },
+                  { id: 'CATALOGUE', label: 'En catalogue' },
+                  { id: 'ADJUGE_ATTENTE', label: 'Adjugé (attente 24h)' },
+                  { id: 'CASCADE_ATTENTE', label: 'Cascade (2e/3e)' },
+                  { id: 'PAYE_SOLDE', label: 'Payé & soldé' },
+                  { id: 'IMPAYE', label: 'Impayé' },
+                ].map((st) => (
+                  <button
+                    key={st.id}
+                    onClick={() => setFinancesFilterStatus(st.id)}
+                    className={`px-3 py-1.5 rounded-lg font-medium transition-colors cursor-pointer ${
+                      financesFilterStatus === st.id
+                        ? 'bg-[#D4AF37] text-slate-950 font-bold'
+                        : 'bg-slate-900 text-slate-400 hover:text-slate-200'
+                    }`}
+                  >
+                    {st.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          </div>
+
+          {/* TABLEAU DU REGISTRE FINANCIER */}
+          {(() => {
+            const filteredRecords = financialRecords.filter((rec) => {
+              if (financesSearch) {
+                const s = financesSearch.toLowerCase();
+                const matchRef = rec.reference?.toLowerCase().includes(s);
+                const matchTitle = rec.title?.toLowerCase().includes(s);
+                if (!matchRef && !matchTitle) return false;
+              }
+              if (financesFilterStatus !== 'ALL') {
+                if (financesFilterStatus === 'CATALOGUE' && !['CATALOGUE', 'EN_VENTE'].includes(rec.financialStatus)) return false;
+                if (financesFilterStatus !== 'CATALOGUE' && rec.financialStatus !== financesFilterStatus) return false;
+              }
+              return true;
+            });
+
+            if (filteredRecords.length === 0) {
+              return (
+                <div className="bg-[#1C2541]/70 border border-slate-800 rounded-2xl p-12 text-center text-slate-400">
+                  <Landmark className="w-10 h-10 mx-auto text-slate-600 mb-3" />
+                  <p className="text-sm font-semibold">Aucune ligne financière ne correspond aux filtres.</p>
+                  <p className="text-xs text-slate-500 mt-1">Chaque objet créé dispose d'une ligne financière unique.</p>
+                </div>
+              );
+            }
+
+            return (
+              <div className="bg-[#1C2541]/70 border border-slate-800 rounded-2xl overflow-hidden shadow-xl">
+                <div className="overflow-x-auto">
+                  <table className="w-full text-left border-collapse text-xs">
+                    <thead>
+                      <tr className="border-b border-slate-800 bg-[#0B132B]/80 text-slate-400 text-[11px] uppercase tracking-wider font-mono">
+                        <th className="p-3 font-semibold">Objet / Réf</th>
+                        <th className="p-3 font-semibold text-amber-300">
+                          <span className="flex items-center gap-1">
+                            <Lock className="w-3 h-3" />
+                            Prix Achat Réel
+                          </span>
+                        </th>
+                        <th className="p-3 font-semibold">Adjugé Initial</th>
+                        <th className="p-3 font-semibold text-amber-200">Prix Retenu</th>
+                        <th className="p-3 font-semibold">Coûts Directs</th>
+                        <th className="p-3 font-semibold">Frais Paiement</th>
+                        <th className="p-3 font-semibold text-emerald-300">Encaissé Réel</th>
+                        <th className="p-3 font-semibold text-amber-300">Marge Brute</th>
+                        <th className="p-3 font-semibold text-[#D4AF37]">Marge Nette</th>
+                        <th className="p-3 font-semibold">Statut Financier</th>
+                        <th className="p-3 font-semibold text-right">Actions</th>
+                      </tr>
+                    </thead>
+                    <tbody className="divide-y divide-slate-800 text-slate-200">
+                      {filteredRecords.map((rec) => {
+                        const acqCost = rec.acquisitionCostCents || 0;
+                        const adjPrice = rec.adjudicatedPriceCents;
+                        const finalPrice = rec.finalPriceCents;
+                        const directCosts = rec.directCostsCents || 0;
+                        const paymentFees = rec.paymentFeesCents || 0;
+                        const collected = rec.collectedAmountCents || 0;
+                        const grossMargin = rec.grossMarginCents || 0;
+                        const netMargin = rec.netMarginCents || 0;
+
+                        // Badge de statut financier
+                        let statusBadge = { label: rec.financialStatus, class: 'bg-slate-800 text-slate-300 border-slate-700' };
+                        if (rec.financialStatus === 'PAYE_SOLDE') {
+                          statusBadge = { label: 'PAYÉ & SOLDÉ', class: 'bg-emerald-950 text-emerald-300 border-emerald-500/50 font-bold' };
+                        } else if (rec.financialStatus === 'ADJUGE_ATTENTE') {
+                          statusBadge = { label: 'ADJUGÉ (ATTENTE 24H)', class: 'bg-blue-950 text-blue-300 border-blue-500/50' };
+                        } else if (rec.financialStatus === 'CASCADE_ATTENTE') {
+                          statusBadge = { label: 'CASCADE EN COURS', class: 'bg-amber-950 text-amber-300 border-amber-600/50 font-bold animate-pulse' };
+                        } else if (rec.financialStatus === 'IMPAYE') {
+                          statusBadge = { label: 'IMPAYÉ DÉFINITIF', class: 'bg-rose-950 text-rose-300 border-rose-600/50 font-bold' };
+                        } else if (rec.financialStatus === 'EN_VENTE') {
+                          statusBadge = { label: 'EN VENTE', class: 'bg-indigo-950 text-indigo-300 border-indigo-500/50' };
+                        } else {
+                          statusBadge = { label: 'CATALOGUE', class: 'bg-slate-800 text-slate-400 border-slate-700' };
+                        }
+
+                        return (
+                          <tr key={rec.id} className="hover:bg-slate-800/40 transition-colors">
+                            {/* Réf & Titre */}
+                            <td className="p-3">
+                              <span className="font-mono text-amber-300 font-bold block">{rec.reference}</span>
+                              <span className="text-slate-300 truncate max-w-[200px] block" title={rec.title}>
+                                {rec.title}
+                              </span>
+                            </td>
+
+                            {/* Prix d'achat réel (Admin exclusif) */}
+                            <td className="p-3 font-mono font-bold text-amber-300">
+                              <span className="flex items-center gap-1.5">
+                                <Lock className="w-3 h-3 text-amber-400/70" />
+                                <span>{(acqCost / 100).toFixed(2)} €</span>
+                              </span>
+                            </td>
+
+                            {/* Prix adjugé initial */}
+                            <td className="p-3 font-mono text-slate-300">
+                              {adjPrice ? `${(adjPrice / 100).toFixed(2)} €` : <span className="text-slate-500 italic">-</span>}
+                            </td>
+
+                            {/* Prix retenu (actualisé après cascade) */}
+                            <td className="p-3 font-mono font-bold text-amber-200">
+                              {finalPrice ? (
+                                <span className="flex items-center gap-1">
+                                  <span>{(finalPrice / 100).toFixed(2)} €</span>
+                                  {adjPrice && finalPrice !== adjPrice && (
+                                    <span className="text-[10px] bg-amber-950 text-amber-400 px-1.5 py-0.2 rounded border border-amber-700">
+                                      Cascade
+                                    </span>
+                                  )}
+                                </span>
+                              ) : (
+                                <span className="text-slate-500 italic">-</span>
+                              )}
+                            </td>
+
+                            {/* Coûts directs */}
+                            <td className="p-3 font-mono text-slate-400">
+                              {(directCosts / 100).toFixed(2)} €
+                            </td>
+
+                            {/* Frais paiement */}
+                            <td className="p-3 font-mono text-slate-400">
+                              {(paymentFees / 100).toFixed(2)} €
+                            </td>
+
+                            {/* Montant réellement encaissé (0 € tant que non payé) */}
+                            <td className="p-3 font-mono font-bold">
+                              {collected > 0 ? (
+                                <span className="text-emerald-300 bg-emerald-950/80 px-2 py-0.5 rounded border border-emerald-500/40">
+                                  {(collected / 100).toFixed(2)} €
+                                </span>
+                              ) : (
+                                <span className="text-slate-500">0,00 €</span>
+                              )}
+                            </td>
+
+                            {/* Marge brute */}
+                            <td className={`p-3 font-mono font-bold ${grossMargin >= 0 ? 'text-amber-300' : 'text-rose-400'}`}>
+                              {(grossMargin / 100).toFixed(2)} €
+                            </td>
+
+                            {/* Marge nette opérationnelle */}
+                            <td className={`p-3 font-mono font-bold ${netMargin >= 0 ? 'text-[#D4AF37]' : 'text-rose-400'}`}>
+                              <span className="block">{(netMargin / 100).toFixed(2)} €</span>
+                              {finalPrice && finalPrice > 0 && (
+                                <span className="text-[10px] text-slate-400 font-normal">
+                                  ({Math.round((netMargin / finalPrice) * 100)} %)
+                                </span>
+                              )}
+                            </td>
+
+                            {/* Statut financier */}
+                            <td className="p-3">
+                              <span className={`text-[10px] px-2 py-0.5 rounded-full border uppercase tracking-wider font-mono ${statusBadge.class}`}>
+                                {statusBadge.label}
+                              </span>
+                            </td>
+
+                            {/* Actions */}
+                            <td className="p-3 text-right whitespace-nowrap">
+                              <div className="flex items-center justify-end gap-1.5">
+                                <button
+                                  onClick={() =>
+                                    setEditFinanceModalItem({
+                                      id: rec.id,
+                                      lotId: rec.lotId,
+                                      reference: rec.reference,
+                                      title: rec.title,
+                                      acquisitionCostEuros: (acqCost / 100).toFixed(2),
+                                      directCostsEuros: (directCosts / 100).toFixed(2),
+                                      paymentFeesEuros: (paymentFees / 100).toFixed(2),
+                                      notes: rec.notes || '',
+                                    })
+                                  }
+                                  className="bg-slate-800 hover:bg-slate-700 text-amber-300 border border-slate-700 px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                                  title="Ajuster le prix d'achat réel, coûts directs ou frais supportés"
+                                >
+                                  <Edit className="w-3 h-3" />
+                                  <span>Frais</span>
+                                </button>
+
+                                <button
+                                  onClick={() => setViewFinanceHistoryItem(rec)}
+                                  className="bg-slate-800 hover:bg-slate-700 text-slate-300 border border-slate-700 px-2.5 py-1 rounded-lg text-xs font-semibold flex items-center gap-1 transition-colors cursor-pointer"
+                                  title="Consulter le journal chronologique des événements financiers"
+                                >
+                                  <History className="w-3 h-3" />
+                                  <span>Journal</span>
+                                </button>
+                              </div>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+              </div>
+            );
+          })()}
+        </div>
+      )}
+
       {/* 2d. LIVRE DE POLICE (RÉGLEMENTATION LÉGALE ART. 321-7 CODE PÉNAL) */}
       {adminTab === 'police' && (
         <div className="space-y-6">
@@ -3309,6 +3814,91 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                 <option value="LIVE">LIVE (Production)</option>
               </select>
             </div>
+          </div>
+
+          {/* SÉCURITÉ ADMINISTRATEUR — CHANGEMENT DE MOT DE PASSE (Priorité 1) */}
+          <div className="border-t border-slate-800 pt-5 mt-5">
+            <div className="flex items-center gap-2 mb-2">
+              <KeyRound className="w-5 h-5 text-[#D4AF37]" />
+              <h3 className="font-serif font-bold text-amber-200 text-sm">
+                Sécurité Administrateur & Remplacement du mot de passe
+              </h3>
+            </div>
+            <p className="text-[11px] text-slate-400 mb-4 leading-relaxed">
+              Le mot de passe initial (<code className="text-amber-300">3030</code>) est temporaire. Vous pouvez le remplacer ici par un mot de passe robuste, qui sera immédiatement chiffré par l'algorithme sécurisé bcrypt côté serveur.
+            </p>
+
+            {passwordChangeMessage && (
+              <div className="p-3 mb-3 bg-emerald-950/80 border border-emerald-500/50 rounded-xl text-emerald-300 text-xs flex items-center gap-2">
+                <CheckCircle2 className="w-4 h-4 shrink-0" />
+                <span>{passwordChangeMessage}</span>
+              </div>
+            )}
+
+            {passwordChangeError && (
+              <div className="p-3 mb-3 bg-rose-950/80 border border-rose-500/50 rounded-xl text-rose-300 text-xs flex items-center gap-2">
+                <AlertCircle className="w-4 h-4 shrink-0" />
+                <span>{passwordChangeError}</span>
+              </div>
+            )}
+
+            <form onSubmit={handleChangeAdminPassword} className="space-y-3">
+              <div>
+                <label className="block text-slate-300 text-xs font-semibold mb-1">
+                  Mot de passe actuel :
+                </label>
+                <input
+                  type="password"
+                  required
+                  value={adminPasswordForm.currentPassword}
+                  onChange={(e) => setAdminPasswordForm({ ...adminPasswordForm, currentPassword: e.target.value })}
+                  placeholder="Saisissez votre mot de passe actuel"
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-[#D4AF37]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 text-xs font-semibold mb-1">
+                    Nouveau mot de passe :
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={adminPasswordForm.newPassword}
+                    onChange={(e) => setAdminPasswordForm({ ...adminPasswordForm, newPassword: e.target.value })}
+                    placeholder="Au moins 6 caractères"
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-[#D4AF37]"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-300 text-xs font-semibold mb-1">
+                    Confirmer le nouveau mot de passe :
+                  </label>
+                  <input
+                    type="password"
+                    required
+                    minLength={6}
+                    value={adminPasswordForm.confirmPassword}
+                    onChange={(e) => setAdminPasswordForm({ ...adminPasswordForm, confirmPassword: e.target.value })}
+                    placeholder="Répétez le nouveau mot de passe"
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-[#D4AF37]"
+                  />
+                </div>
+              </div>
+
+              <div className="pt-2">
+                <button
+                  type="submit"
+                  disabled={passwordLoading}
+                  className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 px-4 py-2 rounded-xl text-xs font-bold transition-colors cursor-pointer flex items-center gap-2"
+                >
+                  <KeyRound className="w-4 h-4" />
+                  <span>{passwordLoading ? 'Mise à jour en cours...' : 'Mettre à jour mon mot de passe'}</span>
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}
@@ -4882,6 +5472,205 @@ export const AdminBackoffice: React.FC<AdminBackofficeProps> = ({ onBack }) => {
                   Fermer
                 </button>
               </div>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: AJUSTER LES FRAIS & COÛTS DU REGISTRE FINANCIER (Priorité 2) */}
+      {editFinanceModalItem && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-lg bg-[#1C2541] border border-amber-500/40 rounded-2xl p-6 shadow-2xl text-slate-200 animate-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3 mb-4">
+              <div className="flex items-center gap-2">
+                <Landmark className="w-5 h-5 text-[#D4AF37]" />
+                <h3 className="font-serif text-lg font-bold text-amber-200">
+                  Ajuster Frais & Coûts — {editFinanceModalItem.reference}
+                </h3>
+              </div>
+              <button
+                type="button"
+                onClick={() => setEditFinanceModalItem(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <p className="text-xs text-slate-400 mb-4">
+              Objet : <strong className="text-slate-200">{editFinanceModalItem.title}</strong>. Saisie des frais réels supportés et du prix d'achat réel (confidentiel administrateur).
+            </p>
+
+            <form onSubmit={handleSaveFinance} className="space-y-4 text-xs">
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1 flex items-center justify-between">
+                  <span>Prix d'Achat Réel (€) :</span>
+                  <span className="text-[10px] text-amber-400 flex items-center gap-1 font-mono">
+                    <Lock className="w-3 h-3" /> Visible exclusivement admin
+                  </span>
+                </label>
+                <input
+                  type="number"
+                  step="0.01"
+                  min="0"
+                  required
+                  value={editFinanceModalItem.acquisitionCostEuros}
+                  onChange={(e) =>
+                    setEditFinanceModalItem({ ...editFinanceModalItem, acquisitionCostEuros: e.target.value })
+                  }
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono text-sm focus:outline-none focus:border-[#D4AF37]"
+                />
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    Coûts directs imputables (€) :
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={editFinanceModalItem.directCostsEuros}
+                    onChange={(e) =>
+                      setEditFinanceModalItem({ ...editFinanceModalItem, directCostsEuros: e.target.value })
+                    }
+                    placeholder="Restauration, encadrement..."
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono text-sm focus:outline-none focus:border-[#D4AF37]"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">Restauration, expertise, transport amont</span>
+                </div>
+
+                <div>
+                  <label className="block text-slate-300 font-semibold mb-1">
+                    Frais de paiement réellement supportés (€) :
+                  </label>
+                  <input
+                    type="number"
+                    step="0.01"
+                    min="0"
+                    value={editFinanceModalItem.paymentFeesEuros}
+                    onChange={(e) =>
+                      setEditFinanceModalItem({ ...editFinanceModalItem, paymentFeesEuros: e.target.value })
+                    }
+                    placeholder="Commissions bancaires, PayPal..."
+                    className="w-full bg-[#0B132B] border border-slate-700 rounded-lg px-3 py-2 text-slate-200 font-mono text-sm focus:outline-none focus:border-[#D4AF37]"
+                  />
+                  <span className="text-[10px] text-slate-500 mt-1 block">Commissions PayPal ou virement réelles</span>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-300 font-semibold mb-1">
+                  Notes comptables & justificatifs :
+                </label>
+                <textarea
+                  rows={2}
+                  value={editFinanceModalItem.notes}
+                  onChange={(e) =>
+                    setEditFinanceModalItem({ ...editFinanceModalItem, notes: e.target.value })
+                  }
+                  placeholder="Justification des frais ou provenance de l'acquisition..."
+                  className="w-full bg-[#0B132B] border border-slate-700 rounded-lg px-3 py-2 text-slate-200 text-xs focus:outline-none focus:border-[#D4AF37]"
+                />
+              </div>
+
+              <div className="flex items-center justify-end gap-3 pt-3 border-t border-slate-700">
+                <button
+                  type="button"
+                  onClick={() => setEditFinanceModalItem(null)}
+                  className="px-4 py-2 rounded-lg text-slate-400 hover:text-white"
+                >
+                  Annuler
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingFinance}
+                  className="bg-[#D4AF37] hover:bg-[#E5C158] text-slate-950 font-bold px-4 py-2 rounded-lg transition-colors cursor-pointer"
+                >
+                  {savingFinance ? 'Calcul en cours...' : 'Enregistrer & Recalculer les marges'}
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* MODAL: HISTORIQUE CHRONOLOGIQUE DE LA LIGNE FINANCIÈRE */}
+      {viewFinanceHistoryItem && (
+        <div className="fixed inset-0 z-50 bg-black/85 backdrop-blur-sm flex items-center justify-center p-4 animate-in fade-in">
+          <div className="w-full max-w-xl bg-[#1C2541] border border-slate-700 rounded-2xl p-6 shadow-2xl text-slate-200 max-h-[85vh] flex flex-col animate-in zoom-in-95">
+            <div className="flex items-center justify-between border-b border-slate-700 pb-3 mb-4">
+              <div className="flex items-center gap-2">
+                <History className="w-5 h-5 text-amber-400" />
+                <div>
+                  <h3 className="font-serif text-lg font-bold text-amber-200">
+                    Journal Financier — {viewFinanceHistoryItem.reference}
+                  </h3>
+                  <span className="text-[11px] text-slate-400">{viewFinanceHistoryItem.title}</span>
+                </div>
+              </div>
+              <button
+                type="button"
+                onClick={() => setViewFinanceHistoryItem(null)}
+                className="text-slate-400 hover:text-white"
+              >
+                ✕
+              </button>
+            </div>
+
+            <div className="flex-1 overflow-y-auto space-y-3 pr-1 text-xs">
+              {Array.isArray(viewFinanceHistoryItem.history) && viewFinanceHistoryItem.history.length > 0 ? (
+                <div className="relative border-l-2 border-slate-700 ml-3 pl-4 space-y-4">
+                  {viewFinanceHistoryItem.history.map((ev: any, idx: number) => {
+                    let evBadge = 'bg-slate-800 text-slate-300';
+                    if (ev.event === 'ADJUDICATION') evBadge = 'bg-blue-950 text-blue-300 border border-blue-500/50';
+                    else if (ev.event === 'CASCADE_TRANSFER') evBadge = 'bg-amber-950 text-amber-300 border border-amber-500/50';
+                    else if (ev.event === 'PAYMENT_RECEIVED') evBadge = 'bg-emerald-950 text-emerald-300 border border-emerald-500/50';
+                    else if (ev.event === 'CASCADE_EXHAUSTED_UNPAID') evBadge = 'bg-rose-950 text-rose-300 border border-rose-500/50';
+
+                    return (
+                      <div key={idx} className="relative">
+                        <div className="absolute -left-[23px] top-1 w-2.5 h-2.5 rounded-full bg-[#D4AF37] border-2 border-[#1C2541]" />
+                        <div className="bg-[#0B132B] border border-slate-800 rounded-xl p-3 space-y-1">
+                          <div className="flex items-center justify-between text-[10px] text-slate-400">
+                            <span className="font-mono">
+                              {ev.timestamp ? new Date(ev.timestamp).toLocaleString('fr-FR') : 'Date non renseignée'}
+                            </span>
+                            <span className={`px-2 py-0.2 rounded font-mono uppercase font-bold text-[9px] ${evBadge}`}>
+                              {ev.event || 'ÉVÉNEMENT'}
+                            </span>
+                          </div>
+                          <p className="text-slate-200 text-xs font-sans leading-relaxed">
+                            {ev.notes || ev.details || 'Événement enregistré'}
+                          </p>
+                          {(ev.adjudicatedPriceCents || ev.newFinalPriceCents || ev.amountCents || ev.collectedAmountCents) && (
+                            <div className="pt-1 text-[11px] font-mono text-amber-300 flex items-center gap-3">
+                              {ev.adjudicatedPriceCents && <span>Adjugé : {(ev.adjudicatedPriceCents / 100).toFixed(2)} €</span>}
+                              {ev.newFinalPriceCents && <span>Nouveau retenu : {(ev.newFinalPriceCents / 100).toFixed(2)} €</span>}
+                              {ev.collectedAmountCents && <span className="text-emerald-300">Encaissé : {(ev.collectedAmountCents / 100).toFixed(2)} €</span>}
+                            </div>
+                          )}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              ) : (
+                <div className="py-8 text-center text-slate-500 italic">
+                  Aucun historique antérieur enregistré pour cette ligne financière.
+                </div>
+              )}
+            </div>
+
+            <div className="pt-4 border-t border-slate-700 flex justify-end">
+              <button
+                type="button"
+                onClick={() => setViewFinanceHistoryItem(null)}
+                className="bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-xl text-xs font-bold cursor-pointer"
+              >
+                Fermer
+              </button>
             </div>
           </div>
         </div>

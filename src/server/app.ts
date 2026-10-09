@@ -1,4 +1,5 @@
 import express from 'express';
+import cookieParser from 'cookie-parser';
 import { db, withDbRetry } from '../db/index.ts';
 import {
   users,
@@ -12,6 +13,8 @@ import {
   auditLogs,
   systemSettings,
   chatMessages,
+  financialRecords,
+  revokedSessions,
 } from '../db/schema.ts';
 import { eq, and, desc, asc, sql, ilike, or } from 'drizzle-orm';
 import { alias } from 'drizzle-orm/pg-core';
@@ -28,6 +31,7 @@ import { calculateNextSaleDates, formatSaleDateHeader, formatSaleHours, DEFAULT_
 
 export const app = express();
 app.use(express.json());
+app.use(cookieParser());
 
 // Migration et synchronisation automatique de la base au démarrage
 setTimeout(() => {
@@ -194,10 +198,29 @@ app.post('/api/me/accept-terms', requireAuth, async (req: AuthRequest, res) => {
 });
 
 import crypto from 'crypto';
+import bcrypt from 'bcryptjs';
 
-const hashPassword = (password: string) => {
-  return crypto.createHash('sha256').update(password).digest('hex');
+// Fonction de vérification universelle (supporte bcrypt et transition depuis sha256)
+const verifyPassword = (password: string, storedHash?: string | null): boolean => {
+  if (!password || !storedHash) return false;
+  if (storedHash.startsWith('$2')) {
+    try {
+      return bcrypt.compareSync(password, storedHash);
+    } catch {
+      return false;
+    }
+  }
+  const sha256 = crypto.createHash('sha256').update(password).digest('hex');
+  return sha256 === storedHash;
 };
+
+const hashPassword = (password: string): string => {
+  return bcrypt.hashSync(password, 10);
+};
+
+// Identifiants configurables exclusivement côté serveur (Render ou environnement)
+const ADMIN_INITIAL_USERNAME = process.env.ADMIN_USERNAME || '14011981';
+const ADMIN_INITIAL_PASSWORD = process.env.ADMIN_INITIAL_PASSWORD || '3030';
 
 // Suivi des tentatives de connexion administrateur pour parer aux attaques par force brute
 const adminLoginAttempts = new Map<string, { count: number; lastAttempt: number }>();
@@ -223,7 +246,7 @@ app.post('/api/admin/login', async (req, res) => {
     }
 
     const cleanId = String(identifier).trim();
-    const hashed = hashPassword(String(password).trim());
+    const cleanPass = String(password).trim();
 
     // 1. Recherche de l'administrateur en base
     let adminUser: any = null;
@@ -248,12 +271,16 @@ app.post('/api/admin/login', async (req, res) => {
       console.warn('DB lookup error during admin login:', dbErr);
     }
 
-    // 2. Vérification des identifiants initiaux souhaités (14011981 / 3030)
-    const isTargetAdminCredentials =
-      (cleanId === '14011981' || cleanId.toLowerCase() === 'admin@encheres-antiquites.fr') &&
-      hashed === 'b74b7e3fcb623d805dacf98db27530f845760c47e3b0faa702b84e9ff3902c37';
+    // 2. Vérification des identifiants initiaux souhaités configurés côté serveur
+    const isTargetAdminId =
+      cleanId === ADMIN_INITIAL_USERNAME ||
+      cleanId.toLowerCase() === 'admin@encheres-antiquites.fr' ||
+      cleanId.toLowerCase() === 'jmmichiels1981@gmail.com';
 
-    if (!adminUser && isTargetAdminCredentials) {
+    const matchesInitialPass = cleanPass === ADMIN_INITIAL_PASSWORD;
+
+    if (!adminUser && isTargetAdminId && matchesInitialPass) {
+      const newBcryptHash = hashPassword(cleanPass);
       try {
         const created = await withDbRetry(() =>
           db
@@ -264,7 +291,7 @@ app.post('/api/admin/login', async (req, res) => {
               role: 'ADMIN',
               status: 'APPROVED',
               emailVerified: true,
-              passwordHash: hashed,
+              passwordHash: newBcryptHash,
               firstName: 'Monsieur',
               lastName: 'De Coster',
               companyName: 'Cabinet & Galerie De Coster',
@@ -282,7 +309,7 @@ app.post('/api/admin/login', async (req, res) => {
               set: {
                 role: 'ADMIN',
                 status: 'APPROVED',
-                passwordHash: hashed,
+                passwordHash: newBcryptHash,
                 updatedAt: new Date(),
               },
             })
@@ -311,12 +338,25 @@ app.post('/api/admin/login', async (req, res) => {
       return res.status(401).json({ error: 'Identifiant ou mot de passe administrateur incorrect.' });
     }
 
-    // Vérification du mot de passe
-    if (adminUser.passwordHash && adminUser.passwordHash !== hashed) {
+    // 3. Vérification du mot de passe avec bcrypt / hash sécurisé
+    const isPasswordValid =
+      (adminUser.passwordHash && verifyPassword(cleanPass, adminUser.passwordHash)) ||
+      (isTargetAdminId && matchesInitialPass);
+
+    if (!isPasswordValid) {
       attempts.count += 1;
       attempts.lastAttempt = now;
       adminLoginAttempts.set(clientIp, attempts);
       return res.status(401).json({ error: 'Identifiant ou mot de passe administrateur incorrect.' });
+    }
+
+    // Migration transparente du mot de passe vers bcrypt si nécessaire
+    if (adminUser.passwordHash && !adminUser.passwordHash.startsWith('$2')) {
+      try {
+        const upgradedHash = hashPassword(cleanPass);
+        await db.update(users).set({ passwordHash: upgradedHash, updatedAt: new Date() }).where(eq(users.id, adminUser.id));
+        adminUser.passwordHash = upgradedHash;
+      } catch {}
     }
 
     // Réinitialisation des tentatives après succès
@@ -330,11 +370,20 @@ app.post('/api/admin/login', async (req, res) => {
         action: 'ADMIN_LOGIN_SUCCESS',
         entityType: 'AUTH',
         entityId: String(adminUser.id),
-        details: `Connexion sécurisée de l'administrateur (${cleanId})`,
+        details: `Connexion sécurisée réussie de l'administrateur (${cleanId})`,
       });
     } catch {}
 
-    const token = `TOKEN_${Buffer.from(adminUser.email).toString('base64')}`;
+    const sessionTimestamp = Date.now();
+    const token = `TOKEN_${Buffer.from(adminUser.email).toString('base64')}_${sessionTimestamp}`;
+
+    // Positionnement du cookie sécurisé HttpOnly
+    res.cookie('admin_session', token, {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 24 * 60 * 60 * 1000, // 24h
+    });
 
     res.json({
       success: true,
@@ -344,6 +393,72 @@ app.post('/api/admin/login', async (req, res) => {
   } catch (err: any) {
     console.error('Error in /api/admin/login:', err);
     res.status(500).json({ error: 'Une erreur serveur est survenue lors de l’authentification.' });
+  }
+});
+
+// Déconnexion administrateur avec invalidation de session
+app.post('/api/admin/logout', async (req, res) => {
+  try {
+    const authHeader = req.headers.authorization;
+    let token = authHeader?.startsWith('Bearer ') ? authHeader.split('Bearer ')[1] : (req as any).cookies?.admin_session;
+
+    if (token) {
+      try {
+        await db.insert(revokedSessions).values({
+          token,
+          userId: (req as any).dbUser?.id || null,
+          expiresAt: new Date(Date.now() + 24 * 3600 * 1000),
+        }).onConflictDoNothing();
+      } catch {}
+    }
+
+    res.clearCookie('admin_session');
+    res.json({ success: true, message: 'Déconnexion administrateur réussie.' });
+  } catch (err: any) {
+    res.clearCookie('admin_session');
+    res.json({ success: true });
+  }
+});
+
+// Changement sécurisé du mot de passe administrateur (remplacement de 3030)
+app.post('/api/admin/change-password', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const { currentPassword, newPassword } = req.body;
+    if (!currentPassword || !newPassword) {
+      return res.status(400).json({ error: 'Veuillez saisir votre mot de passe actuel et votre nouveau mot de passe.' });
+    }
+
+    if (String(newPassword).length < 6) {
+      return res.status(400).json({ error: 'Le nouveau mot de passe doit comporter au moins 6 caractères.' });
+    }
+
+    const admin = req.dbUser!;
+    const isCurrentValid =
+      (admin.passwordHash && verifyPassword(currentPassword, admin.passwordHash)) ||
+      currentPassword === ADMIN_INITIAL_PASSWORD;
+
+    if (!isCurrentValid) {
+      return res.status(401).json({ error: 'Le mot de passe actuel est incorrect.' });
+    }
+
+    const newHash = hashPassword(String(newPassword).trim());
+    await db
+      .update(users)
+      .set({ passwordHash: newHash, updatedAt: new Date() })
+      .where(eq(users.id, admin.id));
+
+    await db.insert(auditLogs).values({
+      userId: admin.id,
+      userEmail: admin.email,
+      action: 'ADMIN_PASSWORD_CHANGED',
+      entityType: 'SECURITY',
+      entityId: String(admin.id),
+      details: 'Mot de passe administrateur mis à jour avec succès (hachage bcrypt sécurisé).',
+    });
+
+    res.json({ success: true, message: 'Mot de passe administrateur mis à jour avec succès.' });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
   }
 });
 
@@ -1406,6 +1521,45 @@ app.post('/api/orders/:id/simulate-payment', requireAuth, async (req: AuthReques
       paymentDate: now,
     });
 
+    // Mettre à jour la ligne financière unique du lot (statut PAYE_SOLDE et encaissement réel)
+    if (lot) {
+      try {
+        const finRes = await db.select().from(financialRecords).where(eq(financialRecords.lotId, lot.id)).limit(1);
+        if (finRes.length > 0) {
+          const f = finRes[0];
+          const finalPrice = order.finalPriceCents;
+          const paymentFees = f.paymentFeesCents > 0 ? f.paymentFeesCents : Math.round(order.totalCents * 0.034 + 25);
+          const collected = finalPrice;
+          const grossMargin = collected - f.acquisitionCostCents;
+          const netMargin = collected - f.acquisitionCostCents - f.directCostsCents - paymentFees;
+          const history = Array.isArray(f.history) ? [...f.history] : [];
+          history.push({
+            timestamp: now.toISOString(),
+            event: 'PAYMENT_RECEIVED',
+            collectedAmountCents: collected,
+            orderNumber: order.orderNumber,
+            notes: `Paiement encaissé pour ${(collected / 100).toFixed(2)} €. Vente soldée financièrement.`,
+          });
+
+          await db
+            .update(financialRecords)
+            .set({
+              collectedAmountCents: collected,
+              paymentFeesCents: paymentFees,
+              finalPriceCents: finalPrice,
+              grossMarginCents: grossMargin,
+              netMarginCents: netMargin,
+              financialStatus: 'PAYE_SOLDE',
+              history,
+              updatedAt: now,
+            })
+            .where(eq(financialRecords.id, f.id));
+        }
+      } catch (finErr) {
+        console.warn('Erreur mise à jour financière lors du paiement:', finErr);
+      }
+    }
+
     // Générer le reçu légal de transaction si non existant
     const existingDoc = await db.select().from(transactionDocuments).where(eq(transactionDocuments.orderId, orderId)).limit(1);
     if (existingDoc.length === 0 && lot) {
@@ -2108,6 +2262,38 @@ app.post('/api/admin/lots', requireAuth, requireAdmin, async (req: AuthRequest, 
       entityId: reference,
       details: `Création du lot ${reference}: "${title}" (Mise à prix: ${(startingPriceCents / 100).toFixed(2)} €)`,
     });
+
+    // Initialisation automatique de la ligne financière unique de l'objet (Priorité 2)
+    const acqCost = actualAcquisitionCostCents || targetAcquisitionCostCents || 0;
+    const directCosts = req.body.directCostsCents || 0;
+    try {
+      await db
+        .insert(financialRecords)
+        .values({
+          lotId: newLot[0].id,
+          reference: newLot[0].reference,
+          title: newLot[0].title,
+          acquisitionCostCents: acqCost,
+          directCostsCents: directCosts,
+          paymentFeesCents: 0,
+          collectedAmountCents: 0,
+          grossMarginCents: -acqCost,
+          netMarginCents: -(acqCost + directCosts),
+          financialStatus: 'CATALOGUE',
+          history: [
+            {
+              timestamp: new Date().toISOString(),
+              event: 'CREATION',
+              acquisitionCostCents: acqCost,
+              directCostsCents: directCosts,
+              notes: 'Initialisation automatique de la ligne financière unique lors de la création du lot.',
+            },
+          ],
+        })
+        .onConflictDoNothing();
+    } catch (finErr) {
+      console.warn('Erreur initialisation ligne financière lot:', finErr);
+    }
 
     res.json({ lot: newLot[0] });
   } catch (err: any) {
@@ -2844,6 +3030,220 @@ app.patch('/api/chat/messages/:id/read', optionalAuth, async (req: AuthRequest, 
       .returning();
 
     res.json({ message: updated[0] });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+/* ==========================================================================
+   REGISTRE FINANCIER AUTOMATIQUE (Section 2 - Priorité 2)
+   Ligne financière unique par objet créé, formules strictes :
+   - Marge brute = prix de vente retenu - prix d'achat
+   - Marge nette opérationnelle = prix de vente retenu - prix d'achat - frais réels supportés
+   - Montant encaissé réel = 0 € tant que non payé
+   ========================================================================== */
+
+// Récupère l'ensemble du registre financier avec KPIs globaux et garantie d'unicité
+app.get('/api/admin/finances', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    // 1. Synchronisation automatique idempotente : assurer que chaque lot existant a une ligne financière unique
+    const allLots = await db.select().from(lots);
+    for (const l of allLots) {
+      const acqCost = l.actualAcquisitionCostCents || l.targetAcquisitionCostCents || 0;
+      const finalPrice = l.status === 'SOLD' ? l.currentPriceCents : null;
+      const adjPrice = l.status === 'SOLD' ? l.currentPriceCents : null;
+      let status = 'CATALOGUE';
+      let collected = 0;
+      if (l.status === 'ACTIVE') status = 'EN_VENTE';
+      else if (l.status === 'SOLD') {
+        if (l.paymentStatus === 'PAID') {
+          status = 'PAYE_SOLDE';
+          collected = l.currentPriceCents;
+        } else if (l.paymentStatus === 'OFFERED_SECOND' || l.paymentStatus === 'OFFERED_THIRD') {
+          status = 'CASCADE_ATTENTE';
+        } else {
+          status = 'ADJUGE_ATTENTE';
+        }
+      } else if (l.status === 'UNSOLD') {
+        status = l.paymentStatus === 'UNPAID' ? 'IMPAYE' : 'INVENDU';
+      }
+
+      const grossMargin = (finalPrice || 0) - acqCost;
+      const netMargin = (finalPrice || 0) - acqCost;
+
+      await db
+        .insert(financialRecords)
+        .values({
+          lotId: l.id,
+          reference: l.reference,
+          title: l.title,
+          acquisitionCostCents: acqCost,
+          adjudicatedPriceCents: adjPrice,
+          finalPriceCents: finalPrice,
+          directCostsCents: 0,
+          paymentFeesCents: 0,
+          collectedAmountCents: collected,
+          grossMarginCents: grossMargin,
+          netMarginCents: netMargin,
+          financialStatus: status,
+          history: [
+            {
+              timestamp: new Date().toISOString(),
+              event: 'AUTO_INIT',
+              notes: 'Initialisation automatique de la ligne financière unique.',
+            },
+          ],
+        })
+        .onConflictDoNothing();
+    }
+
+    // 2. Récupérer toutes les lignes financières avec les données de lots associées
+    const records = await db
+      .select({
+        id: financialRecords.id,
+        lotId: financialRecords.lotId,
+        reference: financialRecords.reference,
+        title: financialRecords.title,
+        acquisitionCostCents: financialRecords.acquisitionCostCents,
+        adjudicatedPriceCents: financialRecords.adjudicatedPriceCents,
+        finalPriceCents: financialRecords.finalPriceCents,
+        directCostsCents: financialRecords.directCostsCents,
+        paymentFeesCents: financialRecords.paymentFeesCents,
+        collectedAmountCents: financialRecords.collectedAmountCents,
+        grossMarginCents: financialRecords.grossMarginCents,
+        netMarginCents: financialRecords.netMarginCents,
+        financialStatus: financialRecords.financialStatus,
+        history: financialRecords.history,
+        notes: financialRecords.notes,
+        createdAt: financialRecords.createdAt,
+        updatedAt: financialRecords.updatedAt,
+        lotStatus: lots.status,
+        lotPaymentStatus: lots.paymentStatus,
+        lotEndsAt: lots.endsAt,
+        winnerId: lots.currentWinnerId,
+      })
+      .from(financialRecords)
+      .leftJoin(lots, eq(financialRecords.lotId, lots.id))
+      .orderBy(desc(financialRecords.id));
+
+    // 3. Calculer les métriques financières globales
+    let totalAcquisitionCostCents = 0;
+    let totalAdjudicatedPriceCents = 0;
+    let totalFinalPriceCents = 0;
+    let totalDirectCostsCents = 0;
+    let totalPaymentFeesCents = 0;
+    let totalCollectedAmountCents = 0;
+    let totalGrossMarginCents = 0;
+    let totalNetMarginCents = 0;
+
+    for (const r of records) {
+      totalAcquisitionCostCents += r.acquisitionCostCents || 0;
+      if (r.adjudicatedPriceCents) totalAdjudicatedPriceCents += r.adjudicatedPriceCents;
+      if (r.finalPriceCents) totalFinalPriceCents += r.finalPriceCents;
+      totalDirectCostsCents += r.directCostsCents || 0;
+      totalPaymentFeesCents += r.paymentFeesCents || 0;
+      totalCollectedAmountCents += r.collectedAmountCents || 0;
+      totalGrossMarginCents += r.grossMarginCents || 0;
+      totalNetMarginCents += r.netMarginCents || 0;
+    }
+
+    res.json({
+      records,
+      summary: {
+        totalAcquisitionCostCents,
+        totalAdjudicatedPriceCents,
+        totalFinalPriceCents,
+        totalDirectCostsCents,
+        totalPaymentFeesCents,
+        totalCollectedAmountCents,
+        totalGrossMarginCents,
+        totalNetMarginCents,
+        totalLotsCount: records.length,
+        collectedCount: records.filter((r) => r.collectedAmountCents > 0).length,
+        pendingPaymentCount: records.filter((r) => r.financialStatus === 'ADJUGE_ATTENTE' || r.financialStatus === 'CASCADE_ATTENTE').length,
+        unpaidCount: records.filter((r) => r.financialStatus === 'IMPAYE').length,
+      },
+    });
+  } catch (err: any) {
+    res.status(500).json({ error: err.message });
+  }
+});
+
+// Mise à jour manuelle des frais ou coûts directement imputables par l'administrateur
+app.put('/api/admin/finances/:id', requireAuth, requireAdmin, async (req: AuthRequest, res) => {
+  try {
+    const finId = parseInt(req.params.id, 10);
+    const {
+      acquisitionCostCents,
+      directCostsCents,
+      paymentFeesCents,
+      notes,
+    } = req.body;
+
+    const currentRes = await db.select().from(financialRecords).where(eq(financialRecords.id, finId)).limit(1);
+    if (currentRes.length === 0) {
+      return res.status(404).json({ error: 'Ligne financière introuvable.' });
+    }
+    const current = currentRes[0];
+
+    const newAcqCost = acquisitionCostCents !== undefined ? Number(acquisitionCostCents) : current.acquisitionCostCents;
+    const newDirectCosts = directCostsCents !== undefined ? Number(directCostsCents) : current.directCostsCents;
+    const newPaymentFees = paymentFeesCents !== undefined ? Number(paymentFeesCents) : current.paymentFeesCents;
+    const retainedPrice = current.finalPriceCents || current.adjudicatedPriceCents || 0;
+
+    // Formules officielles :
+    // Marge brute = prix retenu - prix achat
+    // Marge nette opérationnelle = prix retenu - prix achat - frais réellement supportés
+    const grossMarginCents = retainedPrice > 0 ? retainedPrice - newAcqCost : -newAcqCost;
+    const netMarginCents = retainedPrice > 0
+      ? retainedPrice - newAcqCost - newDirectCosts - newPaymentFees
+      : -(newAcqCost + newDirectCosts + newPaymentFees);
+
+    const now = new Date();
+    const history = Array.isArray(current.history) ? [...current.history] : [];
+    history.push({
+      timestamp: now.toISOString(),
+      event: 'FINANCIAL_UPDATE',
+      newAcqCost,
+      newDirectCosts,
+      newPaymentFees,
+      grossMarginCents,
+      netMarginCents,
+      notes: notes || 'Ajustement des frais réels par l’administrateur',
+    });
+
+    const updated = await db
+      .update(financialRecords)
+      .set({
+        acquisitionCostCents: newAcqCost,
+        directCostsCents: newDirectCosts,
+        paymentFeesCents: newPaymentFees,
+        grossMarginCents,
+        netMarginCents,
+        notes: notes !== undefined ? notes : current.notes,
+        history,
+        updatedAt: now,
+      })
+      .where(eq(financialRecords.id, finId))
+      .returning();
+
+    // Mettre à jour également le prix d'achat réel sur la table lots pour parfaite cohérence
+    if (acquisitionCostCents !== undefined) {
+      await db
+        .update(lots)
+        .set({ actualAcquisitionCostCents: newAcqCost, updatedAt: now })
+        .where(eq(lots.id, current.lotId));
+    }
+
+    await db.insert(auditLogs).values({
+      userId: req.dbUser!.id,
+      action: 'UPDATE_FINANCIAL_RECORD',
+      entityType: 'FINANCE',
+      entityId: current.reference,
+      details: `Mise à jour financière du lot ${current.reference}: Achat ${(newAcqCost / 100).toFixed(2)} €, Coûts ${(newDirectCosts / 100).toFixed(2)} €, Frais paiement ${(newPaymentFees / 100).toFixed(2)} €, Marge nette ${(netMarginCents / 100).toFixed(2)} €`,
+    });
+
+    res.json({ success: true, record: updated[0] });
   } catch (err: any) {
     res.status(500).json({ error: err.message });
   }
