@@ -25,6 +25,8 @@ import {
   Calendar,
   RotateCw,
   Scale,
+  ShieldCheck,
+  Lock,
 } from 'lucide-react';
 import { calculateShipping } from '../lib/shipping.ts';
 import { ShippingRatesModal } from './ShippingRatesModal.tsx';
@@ -72,6 +74,13 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
   const [payingWithPayPal, setPayingWithPayPal] = useState(false);
   const [paymentSuccess, setPaymentSuccess] = useState<string | null>(null);
   const [paymentError, setPaymentError] = useState<string | null>(null);
+  const [activePaymentMethod, setActivePaymentMethod] = useState<'paypal' | 'card'>('paypal');
+  const [cardDetails, setCardDetails] = useState({
+    cardholder: '',
+    cardNumber: '',
+    expiry: '',
+    cvv: '',
+  });
 
   // Document modal
   const [selectedDoc, setSelectedDoc] = useState<TransactionDoc | null>(null);
@@ -212,9 +221,17 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
     }
   };
 
-  // Traitement du paiement PayPal
-  const handleExecutePayPal = async (order: Order) => {
+  // Traitement du paiement PayPal ou Carte bancaire via PayPal
+  const handleExecutePayPal = async (order: Order, methodLabel: string = 'PayPal') => {
     if (!token) return;
+
+    if (methodLabel === 'Carte Bancaire') {
+      if (cardDetails.cardNumber && cardDetails.cardNumber.replace(/\s+/g, '').length < 15) {
+        setPaymentError('Veuillez saisir un numéro de carte bancaire valide (16 chiffres).');
+        return;
+      }
+    }
+
     setPayingWithPayPal(true);
     setPaymentError(null);
     setPaymentSuccess(null);
@@ -227,25 +244,29 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
       });
 
       const createData = await createRes.json();
-      if (!createRes.ok) throw new Error(createData.error || 'Erreur création PayPal.');
+      if (!createRes.ok) throw new Error(createData.error || 'Erreur création de la transaction.');
 
       const paypalOrderId = createData.id;
 
-      // 2. Simuler ou déclencher la capture sécurisée côté serveur
+      // 2. Capture sécurisée côté serveur avec spécification de la méthode choisie
+      const finalMethodName = methodLabel === 'Carte Bancaire' ? 'Carte Bancaire (via PayPal)' : 'PayPal';
       const captureRes = await fetch(`/api/orders/${order.id}/paypal/capture`, {
         method: 'POST',
         headers: {
           Authorization: `Bearer ${token}`,
           'Content-Type': 'application/json',
         },
-        body: JSON.stringify({ paypalOrderId }),
+        body: JSON.stringify({
+          paypalOrderId,
+          paymentMethod: finalMethodName,
+        }),
       });
 
       const captureData = await captureRes.json();
-      if (!captureRes.ok) throw new Error(captureData.error || 'Erreur capture PayPal.');
+      if (!captureRes.ok) throw new Error(captureData.error || 'Erreur lors de la capture du paiement.');
 
       setPaymentSuccess(
-        `Paiement validé avec succès ! Reçu officiel n° ${captureData.documentNumber} émis.`
+        `Paiement validé avec succès (${finalMethodName}) ! Reçu officiel n° ${captureData.documentNumber} émis.`
       );
       await loadData();
       setTimeout(() => {
@@ -1616,32 +1637,187 @@ export const CustomerSpace: React.FC<CustomerSpaceProps> = ({ onBack }) => {
                 </div>
               )}
 
-              <p className="text-[11px] text-slate-400 leading-relaxed">
-                Paiement direct sécurisé au vendeur particulier via PayPal Business. La transaction sera vérifiée côté serveur avant confirmation finale.
-              </p>
+              {/* Notice légale & Échéance 24h */}
+              <div className="bg-amber-500/10 border border-amber-500/30 rounded-xl p-3 flex items-start gap-2.5">
+                <Clock className="w-4 h-4 text-amber-400 shrink-0 mt-0.5" />
+                <div className="text-[11px] text-amber-200/90 leading-relaxed">
+                  <span className="font-bold text-amber-300">Délai impératif de 24h : </span>
+                  Votre adjudication doit être réglée sous 24 heures par PayPal ou carte bancaire. Passé ce délai, l'offre gagnante sera automatiquement réattribuée au second enchérisseur.
+                </div>
+              </div>
 
-              <div className="pt-2 flex items-center justify-end gap-3">
+              {/* Sélection du mode de paiement PayPal Smart Buttons */}
+              <div className="space-y-3 pt-1">
+                <div className="text-[11px] font-semibold text-slate-300 flex items-center justify-between">
+                  <span>Choisissez votre moyen de paiement sécurisé :</span>
+                  <span className="text-[10px] text-emerald-400 flex items-center gap-1">
+                    <ShieldCheck className="w-3.5 h-3.5" />
+                    Garanti par PayPal Business
+                  </span>
+                </div>
+
+                {/* Bouton 1 : PayPal officiel (Jaune #FFC439) */}
+                <button
+                  type="button"
+                  onClick={() => {
+                    setActivePaymentMethod('paypal');
+                    handleExecutePayPal(selectedOrderForPayment, 'PayPal');
+                  }}
+                  disabled={payingWithPayPal}
+                  className="w-full bg-[#FFC439] hover:bg-[#F4B930] active:scale-[0.99] text-[#003087] font-bold py-3 px-4 rounded-xl shadow-md transition-all flex items-center justify-center gap-3 cursor-pointer disabled:opacity-60 border border-amber-300"
+                >
+                  <div className="flex items-center gap-1.5 font-sans tracking-tight">
+                    <span className="font-black italic text-base text-[#003087]">Pay</span>
+                    <span className="font-black italic text-base text-[#0079C1]">Pal</span>
+                  </div>
+                  <span className="text-sm font-semibold text-slate-900">
+                    {payingWithPayPal && activePaymentMethod === 'paypal'
+                      ? 'Connexion sécurisée à PayPal...'
+                      : 'Payer avec PayPal'}
+                  </span>
+                </button>
+
+                <div className="relative flex py-1 items-center">
+                  <div className="flex-grow border-t border-slate-700"></div>
+                  <span className="flex-shrink mx-3 text-[10px] uppercase tracking-wider text-slate-400 font-semibold">
+                    ou
+                  </span>
+                  <div className="flex-grow border-t border-slate-700"></div>
+                </div>
+
+                {/* Bouton 2 : Carte Bancaire PayPal (Noir #2C2E2F) */}
+                <button
+                  type="button"
+                  onClick={() => setActivePaymentMethod(activePaymentMethod === 'card' ? 'paypal' : 'card')}
+                  disabled={payingWithPayPal}
+                  className="w-full bg-[#2C2E2F] hover:bg-[#1f2021] text-white font-medium py-3 px-4 rounded-xl shadow-md transition-all flex items-center justify-between gap-3 cursor-pointer border border-slate-700 hover:border-slate-500"
+                >
+                  <div className="flex items-center gap-2">
+                    <CreditCard className="w-4 h-4 text-amber-300" />
+                    <span className="text-xs font-semibold">Débit ou Carte bancaire</span>
+                    <span className="text-[10px] text-slate-400 hidden sm:inline">(Sans compte PayPal)</span>
+                  </div>
+                  <div className="flex items-center gap-1.5">
+                    <span className="text-[9px] font-bold bg-[#0055A5] text-white px-1.5 py-0.5 rounded">CB</span>
+                    <span className="text-[9px] font-bold bg-[#1A1F71] text-white px-1.5 py-0.5 rounded">VISA</span>
+                    <span className="text-[9px] font-bold bg-[#EB001B] text-white px-1.5 py-0.5 rounded">MC</span>
+                  </div>
+                </button>
+
+                {/* Volet formulaire de saisie sécurisée Carte Bancaire */}
+                {activePaymentMethod === 'card' && (
+                  <div className="bg-[#0B132B]/80 p-4 rounded-xl border border-slate-700 space-y-3 animate-in fade-in slide-in-from-top-2">
+                    <div className="flex items-center justify-between text-[11px] text-slate-300 pb-1 border-b border-slate-800">
+                      <span className="font-semibold text-amber-200">Saisie sécurisée Carte bancaire</span>
+                      <span className="text-[10px] text-slate-400 flex items-center gap-1">
+                        <Lock className="w-3 h-3 text-emerald-400" /> Cryptage SSL 256 bits
+                      </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1">Nom sur la carte</label>
+                      <input
+                        type="text"
+                        placeholder="Ex: Jean Dupont"
+                        value={cardDetails.cardholder || `${user?.firstName || ''} ${user?.lastName || ''}`.trim()}
+                        onChange={(e) => setCardDetails({ ...cardDetails, cardholder: e.target.value })}
+                        className="w-full bg-[#1C2541] border border-slate-700 rounded-lg px-3 py-2 text-xs text-white focus:outline-none focus:border-amber-400"
+                      />
+                    </div>
+
+                    <div>
+                      <label className="block text-[10px] text-slate-400 mb-1">Numéro de carte bancaire</label>
+                      <div className="relative">
+                        <input
+                          type="text"
+                          maxLength={19}
+                          placeholder="4970 •••• •••• 4242"
+                          value={cardDetails.cardNumber}
+                          onChange={(e) => {
+                            const val = e.target.value.replace(/\D/g, '').replace(/(.{4})/g, '$1 ').trim();
+                            setCardDetails({ ...cardDetails, cardNumber: val });
+                          }}
+                          className="w-full bg-[#1C2541] border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-amber-400"
+                        />
+                        <CreditCard className="w-4 h-4 text-slate-500 absolute right-3 top-2.5" />
+                      </div>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-3">
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">Date d'expiration</label>
+                        <input
+                          type="text"
+                          maxLength={5}
+                          placeholder="MM/AA (ex: 12/28)"
+                          value={cardDetails.expiry}
+                          onChange={(e) => {
+                            let val = e.target.value.replace(/\D/g, '');
+                            if (val.length >= 2) val = val.slice(0, 2) + '/' + val.slice(2, 4);
+                            setCardDetails({ ...cardDetails, expiry: val });
+                          }}
+                          className="w-full bg-[#1C2541] border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-amber-400"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-[10px] text-slate-400 mb-1">Code CVV / CVC</label>
+                        <input
+                          type="password"
+                          maxLength={4}
+                          placeholder="•••"
+                          value={cardDetails.cvv}
+                          onChange={(e) => setCardDetails({ ...cardDetails, cvv: e.target.value.replace(/\D/g, '') })}
+                          className="w-full bg-[#1C2541] border border-slate-700 rounded-lg px-3 py-2 text-xs font-mono text-white focus:outline-none focus:border-amber-400"
+                        />
+                      </div>
+                    </div>
+
+                    {/* Remplissage de démonstration rapide si souhaité */}
+                    {!cardDetails.cardNumber && (
+                      <button
+                        type="button"
+                        onClick={() =>
+                          setCardDetails({
+                            cardholder: `${user?.firstName || 'Jean'} ${user?.lastName || 'Dupont'}`.trim(),
+                            cardNumber: '4970 8200 1234 5678',
+                            expiry: '12/28',
+                            cvv: '888',
+                          })
+                        }
+                        className="text-[10px] text-amber-400 hover:text-amber-300 underline text-left block"
+                      >
+                        ⚡ Remplir avec une carte test sécurisée
+                      </button>
+                    )}
+
+                    <button
+                      type="button"
+                      onClick={() => handleExecutePayPal(selectedOrderForPayment, 'Carte Bancaire')}
+                      disabled={payingWithPayPal}
+                      className="w-full bg-emerald-600 hover:bg-emerald-500 text-white font-bold py-2.5 px-4 rounded-lg text-xs shadow-md flex items-center justify-center gap-2 cursor-pointer transition-all disabled:opacity-60"
+                    >
+                      <Lock className="w-3.5 h-3.5" />
+                      <span>
+                        {payingWithPayPal
+                          ? 'Vérification 3D-Secure en cours...'
+                          : `Régler ${formatEuro(selectedOrderForPayment.totalCents)} par Carte bancaire`}
+                      </span>
+                    </button>
+                  </div>
+                )}
+              </div>
+
+              <div className="pt-2 flex items-center justify-between border-t border-slate-800 text-[10px] text-slate-400">
+                <div className="flex items-center gap-1.5">
+                  <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                  <span>Document de transaction sans TVA émis instantanément</span>
+                </div>
                 <button
                   type="button"
                   onClick={() => setSelectedOrderForPayment(null)}
-                  className="px-4 py-2 text-xs text-slate-400 hover:text-white"
+                  className="px-3 py-1.5 text-slate-400 hover:text-white transition-colors cursor-pointer"
                 >
-                  Annuler
-                </button>
-                <button
-                  type="button"
-                  onClick={() => handleExecutePayPal(selectedOrderForPayment)}
-                  disabled={payingWithPayPal}
-                  className="bg-[#0070BA] hover:bg-[#005ea6] text-white font-bold px-6 py-2.5 rounded-lg text-xs shadow-lg flex items-center gap-2 transition-all cursor-pointer"
-                >
-                  {payingWithPayPal ? (
-                    <span>Traitement sécurisé...</span>
-                  ) : (
-                    <>
-                      <CreditCard className="w-4 h-4" />
-                      <span>Confirmer le paiement avec PayPal</span>
-                    </>
-                  )}
+                  Fermer
                 </button>
               </div>
             </div>

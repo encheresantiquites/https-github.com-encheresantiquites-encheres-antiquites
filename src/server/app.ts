@@ -1443,13 +1443,18 @@ app.post('/api/orders/:id/paypal/capture', requireAuth, async (req: AuthRequest,
   try {
     const orderId = parseInt(req.params.id);
     const userId = req.dbUser!.id;
-    const { paypalOrderId } = req.body;
+    const { paypalOrderId, paymentMethod } = req.body;
 
     if (!paypalOrderId) {
       return res.status(400).json({ error: 'Identifiant PayPal manquant.' });
     }
 
-    const result = await captureAndVerifyPayPalPayment(orderId, userId, paypalOrderId);
+    const result = await captureAndVerifyPayPalPayment(
+      orderId,
+      userId,
+      paypalOrderId,
+      paymentMethod || 'PayPal'
+    );
     res.json(result);
   } catch (err: any) {
     res.status(400).json({ error: err.message });

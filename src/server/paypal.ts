@@ -125,7 +125,8 @@ export async function createPayPalOrder(orderId: number, buyerId: number) {
 export async function captureAndVerifyPayPalPayment(
   orderId: number,
   buyerId: number,
-  paypalOrderId: string
+  paypalOrderId: string,
+  paymentMethodLabel: string = 'PayPal'
 ) {
   return await db.transaction(async (tx) => {
     const orderRes = await tx
@@ -242,7 +243,7 @@ export async function captureAndVerifyPayPalPayment(
       amountCents: order.finalPriceCents,
       shippingCents: order.shippingCostCents,
       totalCents: order.totalCents,
-      paymentMethod: 'PayPal',
+      paymentMethod: paymentMethodLabel,
       paymentReference: captureId,
       paidAt: now,
     });
@@ -254,7 +255,7 @@ export async function captureAndVerifyPayPalPayment(
       action: 'PAYMENT_RECEIVED',
       entityType: 'ORDER',
       entityId: order.orderNumber,
-      details: `Paiement PayPal confirmé de ${(order.totalCents / 100).toFixed(2)} € pour la commande ${order.orderNumber}. Capture ID: ${captureId}. Document ${docNumber} généré. Objet prêt pour la chaîne d'acquisition.`,
+      details: `Paiement ${paymentMethodLabel} confirmé de ${(order.totalCents / 100).toFixed(2)} € pour la commande ${order.orderNumber}. Capture ID: ${captureId}. Document ${docNumber} généré. Objet prêt pour la chaîne d'acquisition.`,
     });
 
     return {
